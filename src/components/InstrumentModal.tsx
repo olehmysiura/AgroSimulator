@@ -3,10 +3,10 @@
 // ============================================================================
 import { AlertTriangle, X } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { CROPS, EPSH_WEEDS, LAYER_DEFS, TARGET_DENSITY, TOOLS, gddForBbch } from '../sim/data';
+import { CROPS, EPSH_WEEDS, LAYER_DEFS, TARGET_DENSITY, TOOLS, ZONES, gddForBbch } from '../sim/data';
 import { liveCrop, toolRelevance } from '../sim/diagnostics';
 import { canopyCover } from '../sim/engine';
-import { PAN_LIMIT, effRes, layer, panBlocking, penetrometerProfile, productiveMoisture } from '../sim/soil';
+import { PAN_LIMIT, effRes, infiltrationRate, layer, panBlocking, penetrometerProfile, productiveMoisture } from '../sim/soil';
 import type { SimState, ToolId } from '../sim/types';
 import { clamp, fmt, formatDay, hashRand } from '../sim/util';
 
@@ -19,6 +19,11 @@ export default function InstrumentModal({ tool, state: s, onClose }: { tool: Too
     shovel: () => <Shovel s={s} />,
     lens: () => <Lens s={s} />,
     ndvi: () => <Ndvi s={s} />,
+    thermometer: () => <Thermo s={s} />,
+    infiltrometer: () => <Infiltro s={s} />,
+    traps: () => <Traps s={s} />,
+    agrolab: () => <Agrolab s={s} />,
+    meteo: () => <Meteo s={s} />,
   };
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-sm" onClick={onClose}>
@@ -26,7 +31,7 @@ export default function InstrumentModal({ tool, state: s, onClose }: { tool: Too
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 px-4 py-2.5">
           <div>
             <h3 className="text-sm font-bold text-slate-50">{TOOLS[tool].name}</h3>
-            <p className="text-[11px] text-slate-400">Вимірювання: {formatDay(s.day)} · {s.crop ? CROPS[s.crop.id].name : 'поле без культури'}</p>
+            <p className="text-[11px] text-slate-400">Вимірювання: {formatDay(s.day, true)} · {s.crop ? CROPS[s.crop.id].name : 'поле без культури'}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white" aria-label="Закрити"><X className="h-4 w-4" /></button>
         </div>
@@ -257,43 +262,186 @@ function heightGP(c: NonNullable<SimState['crop']>) {
 }
 
 // --------------------------------------------------------------------------- N-тестер + лупа
-const PESTS: Record<string, string> = {
-  corn: 'Попелиця злакова (Rhopalosiphum padi), личинки стеблового метелика',
-  wheat: 'Попелиця велика злакова (Sitobion avenae), п\'явиця червоногруда',
-  sunflower: 'Попелиця соняшникова (Brachycaudus helichrysi)',
-  soy: 'Павутинний кліщ (Tetranychus urticae)',
-  rapeseed: 'Ріпаковий квіткоїд (Meligethes aeneus)',
-  sugarbeet: 'Бурякова блішка (Chaetocnema concinna)',
-};
-
 function Lens({ s }: { s: SimState }) {
   const c = liveCrop(s) ?? s.crop;
   if (!c || !c.emerged) return <Row k="Листкова поверхня" v="відсутня — вимірювання неможливе" />;
-  const spad = clamp(26 + 22 * Math.min(1.1, c.nStatus) - c.leafFrost * 14 - c.disease * 0.12, 5, 58);
+  const def = CROPS[c.id];
+  const spad = clamp(26 + 22 * Math.min(1.35, c.nStatus) - c.leafFrost * 14 - c.disease * 0.12 - (def.pest.kind === 'mite' ? c.pests * 0.25 : 0), 5, 62);
   const wheat = c.id === 'wheat';
+  const mite = def.pest.kind === 'mite';
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <div>
         <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">N-тестер хлорофілу (30 замірів)</div>
         <Row k="Показник хлорофілу, SPAD" v={fmt(spad, 1)} />
         <Row k="Розкид замірів" v={`${fmt(spad - 3.1, 1)} … ${fmt(spad + 2.7, 1)}`} />
-        <Row k="Колір верхнього листка" v={c.nStatus < 0.6 ? 'світло-зелений, жовтіє від верхівки' : c.nStatus < 0.85 ? 'зелений з посвітлінням' : 'темно-зелений'} />
+        <Row k="Колір верхнього листка" v={c.nStatus < 0.6 ? 'світло-зелений, жовтіє від верхівки' : c.nStatus < 0.85 ? 'зелений з посвітлінням' : c.nStatus > 1.2 ? 'темно-зелений із синюватим відтінком' : 'темно-зелений'} />
         <Row k="Нижні листки" v={c.nStatus < 0.6 ? 'жовтіють V-подібно вздовж центральної жилки' : 'зелені'} />
+        {(c.id === 'wheat' || c.id === 'rapeseed') && <Row k="Стебло (нижнє міжвузля)" v={c.nStatus > 1.2 && c.stand > 110 && !c.retardant ? 'видовжене, тонке, стінка ~0,4 мм' : 'щільне, стінка ~0,7 мм'} />}
       </div>
       <div>
         <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">Агрономічна лупа ×20</div>
         <Row k="Площа некротичних плям" v={`${fmt(c.disease, 0)}% (нижній ярус)`} />
-        {wheat ? (
-          <>
-            <Row k="Пікніди в межах плям" v={c.disease > 3 ? `темно-бурі, ~${Math.round(c.disease * 1.4)} шт./см²` : 'не виявлено'} />
-            <Row k="Форма плям" v={c.disease > 3 ? 'видовжені, обмежені жилками, світло-бурі з темним облямівком' : '—'} />
-          </>
-        ) : (
-          <Row k="Спороношення" v={c.disease > 5 ? 'поодинокі пустули / наліт на нижніх листках' : 'не виявлено'} />
-        )}
-        <Row k="Шкідники, ос./рослину" v={fmt(c.pests, 1)} />
-        <Row k="Видовий склад" v={<span className="block max-w-[230px] font-sans text-[11px] leading-snug">{c.pests > 0.5 ? PESTS[c.id] : 'не виявлено'}</span>} />
-        <Row k="Тканини листка" v={c.leafFrost > 0.15 ? 'клітини зруйновані, тканина мацерована' : c.wilting ? 'тургор знижений, продихи закриті' : 'тургесцентні'} />
+        <Row k="Опис уражень" v={<span className="block max-w-[230px] font-sans text-[11px] leading-snug">{c.disease > 3 ? def.disease.sign : 'не виявлено'}</span>} />
+        {wheat && <Row k="Пікніди в межах плям" v={c.disease > 3 ? `темно-бурі, ~${Math.round(c.disease * 1.4)} шт./см²` : 'не виявлено'} />}
+        <Row k={`Членистоногі, ${def.pest.unit}`} v={fmt(c.pests, 1)} />
+        <Row k="Морфологія" v={<span className="block max-w-[230px] font-sans text-[11px] leading-snug">{c.pests < 0.5 ? 'не виявлено' : mite ? '4 пари ніг, тіло ~0,5 мм, жовто-зелене з 2 темними плямами; яйця кулясті, прозорі; тонке павутиння' : c.id === 'rapeseed' ? 'жук 1,5–2,5 мм, металево-зелено-чорний, 3 пари ніг; у бутонах вигризені тичинки' : '3 пари ніг, видимі колонії / личинки на органах рослини'}</span>} />
+        <Row k="Тканини листка" v={c.leafFrost > 0.15 ? 'клітини зруйновані, тканина мацерована' : mite && c.pests > 5 ? 'дрібна світла крапчастість (проколи клітин)' : c.wilting ? 'тургор знижений, продихи закриті' : 'тургесцентні'} />
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- ґрунтові термометри
+function Thermo({ s }: { s: SimState }) {
+  const w = s.weather;
+  const depths = [0, 2, 5, 10, 15, 20, 40];
+  const at = (d: number) => {
+    const l = s.layers.find((x) => d >= x.top && d < x.bottom) ?? s.layers[0];
+    return l.temp + (d < 8 ? (w.tSoil - l.temp) * 0.5 * Math.exp(-d / 6) : 0);
+  };
+  const amp = (d: number) => ((w.tMax - w.tMin) / 2) * 0.75 * Math.exp(-d / 7) * (s.snow > 5 ? 0.15 : 1);
+  return (
+    <div className="grid gap-4 md:grid-cols-[1fr_220px]">
+      <table className="w-full font-mono text-[11px]">
+        <thead className="text-[10px] uppercase text-slate-400"><tr className="border-b border-slate-700"><th className="py-1 text-left">Глибина</th><th>08:00</th><th>14:00</th><th>Середня</th></tr></thead>
+        <tbody>
+          {depths.map((d) => {
+            const m = at(d);
+            const morning = m - amp(d);
+            return (
+              <tr key={d} className="border-b border-slate-800 text-center">
+                <td className="py-1 text-left font-sans text-slate-300">{d} см{d === 0 ? ' (поверхня)' : ''}</td>
+                <td className={morning < 0 ? 'text-sky-300' : morning < 10 ? 'text-cyan-200' : ''}>{fmt(morning, 1)}</td>
+                <td>{fmt(m + amp(d), 1)}</td>
+                <td>{fmt(m, 1)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div>
+        <Row k="Повітря (2 м), мін./макс." v={`${fmt(w.tMin)} / ${fmt(w.tMax)} °C`} />
+        <Row k="Сніговий покрив" v={s.snow > 0 ? `${Math.round(s.snow * 3)} см` : 'немає'} />
+        <Row k="Стан поверхні" v={at(0) - amp(0) < 0 ? 'вранці мерзла, іній' : 'талий'} />
+        <p className="mt-2 text-[10px] text-slate-500">Комплект колінчастих термометрів Савінова, встановлених у міжрядді; знімання показів — двічі на добу.</p>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- інфільтрометр
+function Infiltro({ s }: { s: SimState }) {
+  const { initial, steady } = infiltrationRate(s);
+  const pts = Array.from({ length: 13 }, (_, i) => {
+    const t = i * 5;
+    const rate = steady + (initial - steady) * Math.exp(-t / 12);
+    return { t, rate };
+  });
+  const W = 420, H = 200;
+  const xs = (t: number) => 40 + (t / 60) * (W - 60);
+  const ys = (r: number) => H - 25 - (r / Math.max(initial, 10)) * (H - 45);
+  return (
+    <div className="grid gap-4 md:grid-cols-[1fr_220px]">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-lg bg-slate-950">
+        {[0, 15, 30, 45, 60].map((t) => <text key={t} x={xs(t)} y={H - 8} fill="#94a3b8" fontSize={10} textAnchor="middle">{t} хв</text>)}
+        <polyline points={pts.map((p) => `${xs(p.t)},${ys(p.rate)}`).join(' ')} fill="none" stroke="#38bdf8" strokeWidth={2.2} />
+        {pts.map((p) => <circle key={p.t} cx={xs(p.t)} cy={ys(p.rate)} r={2.5} fill="#38bdf8" />)}
+        <text x={8} y={14} fill="#94a3b8" fontSize={10}>Швидкість вбирання, мм/год</text>
+      </svg>
+      <div>
+        {pts.filter((_, i) => i % 3 === 0).map((p) => <Row key={p.t} k={`${p.t} хв`} v={`${fmt(p.rate, 1)} мм/год`} />)}
+        <Row k="Усталена швидкість" v={`${fmt(steady, 1)} мм/год`} warn={steady < 10} />
+        <p className="mt-2 text-[10px] text-slate-500">Подвійне кільце Ø 30/60 см, постійний напір 5 см.</p>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- пастки
+function Traps({ s }: { s: SimState }) {
+  const c = liveCrop(s);
+  const def = c ? CROPS[c.id] : null;
+  const insects = c && def?.pest.kind === 'insect' ? c.pests : 0;
+  const n = (k: number, base: number) => Math.round(base * (0.8 + hashRand(s.day, k, 'tr') * 0.4));
+  const rows: [string, string, number][] = [
+    ['Жовта клейова пастка', def && def.pest.kind === 'insect' ? `${def.pest.name} (${def.pest.latin})` : 'цільовий шкідник культури', n(1, insects * (c?.id === 'rapeseed' ? 9 : 4))],
+    ['Жовта клейова пастка', 'Попелиці (крилаті форми)', n(2, 3 + (s.weather.tAir > 15 ? 8 : 1))],
+    ['Феромонна пастка', 'Бавовникова совка (Helicoverpa armigera), самці', n(3, s.weather.tAir > 18 ? 6 : 0)],
+    ['Феромонна пастка', 'Стебловий метелик (Ostrinia nubilalis), самці', n(4, c?.id === 'corn' ? insects * 3 + 2 : 1)],
+    ['Жовта клейова пастка', 'Ентомофаги: сонечка, золотоочки, сирфіди', n(5, 4 + (c ? 6 : 1))],
+  ];
+  return (
+    <div>
+      <table className="w-full text-[11px]">
+        <thead className="text-[10px] uppercase text-slate-400"><tr className="border-b border-slate-700"><th className="py-1 text-left">Пастка</th><th className="text-left">Вид</th><th className="text-right">Вилов за 7 діб</th></tr></thead>
+        <tbody>
+          {rows.map(([t, sp, v], i) => (
+            <tr key={i} className="border-b border-slate-800"><td className="py-1 text-slate-400">{t}</td><td>{sp}</td><td className="text-right font-mono">{v} екз.</td></tr>
+          ))}
+        </tbody>
+      </table>
+      {c && def?.pest.kind === 'mite' && <p className="mt-2 text-[11px] text-slate-400">Клейові пастки кліщів не відловлюють — вони не літають.</p>}
+      <p className="mt-2 text-[10px] text-slate-500">4 пастки на поле, висота розміщення — на рівні верхівок рослин.</p>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- агрохімічний аналіз
+function Agrolab({ s }: { s: SimState }) {
+  const a = layer(s, 'arable');
+  const sb = layer(s, 'seedbed');
+  const n = s.nutrients;
+  const pH = (sb.pH + a.pH) / 2;
+  const hydro = Math.max(0.3, (6.8 - pH) * 1.9);
+  const bases = ZONES[s.zone].fcPerCm < 2.5 ? 6 + (pH - 4.5) * 3 : 28 + (pH - 6) * 4;
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <div>
+        <div className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">Шар 0–30 см, змішаний зразок (20 уколів)</div>
+        <Row k="pH сольової витяжки (KCl)" v={fmt(pH, 1)} warn={pH < 5.5} />
+        <Row k="Гідролітична кислотність, мг-екв/100 г" v={fmt(hydro, 2)} />
+        <Row k="Сума ввібраних основ, мг-екв/100 г" v={fmt(bases, 1)} />
+        <Row k="Ступінь насичення основами, %" v={fmt((bases / (bases + hydro)) * 100, 0)} />
+        <Row k="Гумус (за Тюріним), %" v={fmt(a.humus, 2)} />
+      </div>
+      <div>
+        <Row k="N мінеральний (NO₃+NH₄), мг/кг" v={fmt((a.nitrogen * 22 + sb.nitrogen * 6) / 28, 1)} warn={a.nitrogen < 6} />
+        <Row k="N лужногідролізований (Корнфілд), мг/кг" v={fmt(a.humus * 28 + a.nitrogen * 2, 0)} />
+        <Row k={`P₂O₅ (${pH < 6.5 ? 'Кірсанов/Чиріков' : 'Мачигін'}), мг/кг`} v={fmt(n.P2O5, 0)} warn={n.P2O5 < 60} />
+        <Row k="K₂O, мг/кг" v={fmt(n.K2O, 0)} warn={n.K2O < 60} />
+        <Row k="S рухома, мг/кг" v={fmt(n.S, 1)} />
+        <Row k="B / Zn рухомі, мг/кг" v={`${fmt(n.B, 2)} / ${fmt(n.Zn, 2)}`} />
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- агрометеостанція
+function Meteo({ s }: { s: SimState }) {
+  const h = s.wHistory.slice(-14);
+  const wetDays = h.filter((w) => w.leafWet >= 10 && w.tAir >= 10 && w.tAir <= 25).length;
+  return (
+    <div className="space-y-2">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] font-mono text-[11px]">
+          <thead className="text-[10px] uppercase text-slate-400"><tr className="border-b border-slate-700"><th className="py-1 text-left">Дата</th><th>t сер.</th><th>t мін</th><th>t макс</th><th>Опади, мм</th><th>RH, %</th><th>Вітер, м/с</th><th>Зволож. листка, год</th></tr></thead>
+          <tbody>
+            {h.map((w) => (
+              <tr key={w.day} className="border-b border-slate-800 text-center">
+                <td className="py-0.5 text-left font-sans text-slate-300">{formatDay(w.day)}</td>
+                <td>{fmt(w.tAir)}</td><td className={w.tMin < 0 ? 'text-sky-300' : ''}>{fmt(w.tMin)}</td><td>{fmt(w.tMax)}</td>
+                <td>{w.rain ? fmt(w.rain) : '—'}{w.snowfall ? ' ❄' : ''}</td><td>{w.humidity}</td><td className={w.wind > 5 ? 'text-red-300' : ''}>{fmt(w.wind)}</td>
+                <td className={w.leafWet >= 10 ? 'text-amber-300' : ''}>{w.leafWet}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <Row k="Сума опадів за 14 діб" v={`${fmt(h.reduce((a, w) => a + w.rain, 0), 0)} мм`} />
+        <Row k="Діб зі зволоженням ≥10 год при 10–25 °C" v={String(wetDays)} />
+        <Row k="Сума t > 10 °C з 1 січня" v={`${Math.round(s.sat)} °C`} />
       </div>
     </div>
   );

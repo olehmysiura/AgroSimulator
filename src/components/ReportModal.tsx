@@ -33,7 +33,7 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold text-slate-50 print:text-black">Атестаційний звіт · AgroSim UA</h3>
-            <p className="text-slate-400">Віртуальна лабораторія агронома · {ZONES[s.zone].name}, {ZONES[s.zone].region} · станом на {formatDay(s.day)}</p>
+            <p className="text-slate-400">Віртуальна лабораторія агронома · {ZONES[s.zone].name}, {ZONES[s.zone].region} · станом на {formatDay(s.day, true)}</p>
           </div>
           <div className="flex gap-1 print:hidden">
             <button type="button" onClick={() => window.print()} className="flex items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 hover:bg-slate-700"><Printer className="h-3.5 w-3.5" />Друк</button>
@@ -70,7 +70,7 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
           {s.mistakes.length === 0 && <p className="text-emerald-400">Помилок не зафіксовано.</p>}
           {s.mistakes.map((m) => (
             <div key={m.id} className="mb-2 rounded-lg border border-red-900/70 bg-red-950/30 p-2 print:border-red-300 print:bg-white">
-              <div className="font-semibold text-red-300 print:text-red-700">{formatDay(m.day)} · {m.action}</div>
+              <div className="font-semibold text-red-300 print:text-red-700">{formatDay(m.day, true)} · {m.action}</div>
               <div className="mt-0.5 text-slate-300 print:text-black"><b>Причина:</b> {m.cause}</div>
               <div className="text-slate-300 print:text-black"><b>Наслідки:</b> {m.consequence}</div>
             </div>
@@ -87,18 +87,18 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
                 ))}
               </>
             ) : <p className="text-slate-500">Культура не висіяна.</p>}
-            {s.harvests.map((h, i) => <div key={i} className="mt-1 text-emerald-300">Зібрано {formatDay(h.day)}: {CROPS[h.crop].name} — {fmt(h.yield, 2)} т/га ({h.pct}%)</div>)}
+            {s.harvests.map((h, i) => <div key={i} className="mt-1 text-emerald-300">Зібрано {formatDay(h.day, true)}: {CROPS[h.crop].name} — {fmt(h.yield, 2)} т/га ({h.pct}%)</div>)}
           </Section>
           <Section title={`Діагностика (${s.diagnostics.length}, нерелевантних ${irrelevant})`}>
             {s.diagnostics.slice(-14).map((d, i) => (
-              <div key={i} className="flex justify-between border-b border-slate-800 py-0.5"><span>{formatDay(d.day)} · {TOOLS[d.tool].short}</span><span className={d.relevant ? 'text-emerald-400' : 'text-amber-300'}>{d.relevant ? 'доречно' : 'не за симптомом'}</span></div>
+              <div key={i} className="flex justify-between border-b border-slate-800 py-0.5"><span>{formatDay(d.day, true)} · {TOOLS[d.tool].short}</span><span className={d.relevant ? 'text-emerald-400' : 'text-amber-300'}>{d.relevant ? 'доречно' : 'не за симптомом'}</span></div>
             ))}
           </Section>
         </div>
 
         <Section title={`Журнал операцій (${s.operations.length})`}>
           <div className="columns-1 gap-4 sm:columns-2">
-            {s.operations.map((o, i) => <div key={i} className="break-inside-avoid py-0.5"><span className="text-slate-500">{formatDay(o.day)}</span> · {o.name}</div>)}
+            {s.operations.map((o, i) => <div key={i} className="break-inside-avoid py-0.5"><span className="text-slate-500">{formatDay(o.day, true)}</span> · {o.name}</div>)}
           </div>
         </Section>
         <p className="mt-4 text-[10px] text-slate-500">Формула: 100 − 8×помилка − 3×нерелевантний прилад у кризі − 5×рішення без діагностики − 10×провалений виклик.</p>

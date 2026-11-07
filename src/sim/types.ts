@@ -3,15 +3,24 @@
 // ============================================================================
 
 export type ZoneId = 'polissia' | 'lisostep' | 'step';
-export type ClimateMode = 'normal' | 'storm' | 'drought' | 'frost' | 'wind';
+export type ClimateMode = 'normal' | 'storm' | 'drought' | 'frost' | 'wind' | 'heat' | 'rainy';
 export type CropId = 'corn' | 'wheat' | 'sunflower' | 'soy' | 'rapeseed' | 'sugarbeet';
 export type SprayMode = 'day' | 'evening';
 
-export type TillageOp = 'plough' | 'chisel' | 'disc' | 'cultivate' | 'rotaryHoe' | 'roll';
-export type SprayOp = 'nitrogen' | 'preHerbicide' | 'postHerbicide' | 'fungicide' | 'insecticide' | 'antistress';
-export type ToolId = 'penetrometer' | 'auger' | 'frame' | 'shovel' | 'lens' | 'ndvi';
-export type QuestId = 'crust' | 'frost' | 'pan' | 'septoria';
-export type CrisisId = 'crust' | 'frost' | 'pan' | 'septoria' | 'pests' | 'weeds' | 'nitrogen' | 'drought';
+export type TillageOp =
+  | 'plough' | 'chisel' | 'flatCut' | 'stripTill' | 'disc' | 'stubbleDisc'
+  | 'cultivate' | 'harrow' | 'rotaryHoe' | 'interRow' | 'roll' | 'mulcher';
+export type SprayOp =
+  | 'preHerbicide' | 'postHerbicide' | 'glyphosate' | 'fungicide' | 'insecticide' | 'acaricide'
+  | 'retardant' | 'desiccant'
+  | 'nitrogen' | 'pk' | 'micro' | 'liming' | 'antistress';
+export type ToolId =
+  | 'penetrometer' | 'auger' | 'frame' | 'shovel' | 'lens' | 'ndvi'
+  | 'thermometer' | 'infiltrometer' | 'traps' | 'agrolab' | 'meteo';
+export type QuestId =
+  | 'crust' | 'frost' | 'pan' | 'septoria'
+  | 'nitrogen' | 'mites' | 'wetsoil' | 'weeds' | 'beetle' | 'coldsoil' | 'acid' | 'lodging';
+export type CrisisId = QuestId | 'pests' | 'drought';
 
 export type LayerId = 'surface' | 'seedbed' | 'arable' | 'pan' | 'transition' | 'parent';
 
@@ -29,14 +38,25 @@ export interface SoilLayer {
   temp: number; // °C
 }
 
+export interface Nutrients {
+  P2O5: number; // мг/кг (за Чиріковим / Мачигіним)
+  K2O: number; // мг/кг
+  S: number;
+  B: number;
+  Zn: number;
+}
+
 export interface Weather {
+  day: number;
   tAir: number; // середньодобова, °C
   tMin: number; // нічний мінімум
   tMax: number;
   tSoil: number; // на глибині посіву
   wind: number; // м/с
-  rain: number; // мм
+  rain: number; // мм (опади всіх видів)
+  snowfall: boolean;
   humidity: number; // %
+  leafWet: number; // год зволоження листка
   event: ClimateMode;
 }
 
@@ -49,32 +69,35 @@ export interface Crop {
   gdd: number; // накопичена САТ (ефективні температури) від посіву
   bbch: number;
   germPotential: number; // потенційна польова схожість, %
-  stand: number; // фактична густота відносно цільової, %
+  stand: number; // фактична густота відносно цільової, % (може бути >100 — загущення)
   emerged: boolean;
   crustDays: number;
-  corkscrew: boolean; // проростки "штопорять" під кіркою
+  corkscrew: boolean;
   rootDepth: number; // см
   rootBlocked: boolean;
   health: number; // 0..100
-  nStatus: number; // 0..1.2
+  nStatus: number; // 0..1.4
   leafFrost: number; // частка почорнілого листя 0..1
   growingPointAlive: boolean;
-  stressUntil: number; // день, до якого культура у стані стресу
+  stressUntil: number;
   stressCause: string;
-  disease: number; // % ураження (септоріоз/хвороби)
+  disease: number; // % ураження
   fungicideUntil: number;
-  pests: number; // особин на рослину
+  pests: number; // особин на рослину (кліщ — на листок)
   insecticideUntil: number;
-  nodules: number; // бульбочок на рослину
-  waterSupply: number; // 0..1 поточне забезпечення
-  waterIndex: number; // інтегральний водний фактор
+  nodules: number;
+  waterSupply: number;
+  waterIndex: number;
   nIndex: number;
   wilting: boolean;
-  losses: Record<string, number>; // мультиплікативні фактори втрат
+  lodged: boolean;
+  retardant: boolean;
+  desiccated: boolean;
+  losses: Record<string, number>;
   dead: boolean;
   deathCause: string;
   harvested: boolean;
-  seedContact: number; // 0.85..1 (коткування покращує)
+  seedContact: number;
   seedbedQuality: number;
 }
 
@@ -106,7 +129,7 @@ export interface QuestState {
 }
 
 export interface Animation {
-  kind: TillageOp | 'sow' | 'spray' | 'clear';
+  kind: TillageOp | 'sow' | 'spray' | 'clear' | 'spread';
   key: number;
   drift?: boolean;
   evening?: boolean;
@@ -114,19 +137,24 @@ export interface Animation {
 
 export interface SimState {
   zone: ZoneId;
-  day: number;
+  startDay: number; // перший день сезону (абсолютний)
+  day: number; // поточний абсолютний день
   climate: ClimateMode;
-  climateUntil: number; // день завершення тимчасового режиму
+  climateUntil: number;
   sprayMode: SprayMode;
   weather: Weather;
+  wHistory: Weather[]; // останні 14 діб (метеостанція)
   layers: SoilLayer[];
+  nutrients: Nutrients;
   residue: number; // % покриття пожнивними рештками
   crust: number; // товщина кірки, см
-  seedbedQuality: number; // 0..1
+  snow: number; // запас води в сніговому покриві, мм
+  looseUntil: number; // день, до якого діє розпушений «мульчуючий» шар (закрита волога)
+  seedbedQuality: number;
   weeds: number; // шт./м2
-  weedFlush: number; // потенціал проростання бур'янів (після дискування)
+  weedFlush: number;
   preHerbUntil: number;
-  sat: number; // сума активних температур >10 °C з 1 січня
+  sat: number; // сума активних температур >10 °C з 1 січня поточного року
   crop: Crop | null;
   log: LogEntry[];
   mistakes: Mistake[];

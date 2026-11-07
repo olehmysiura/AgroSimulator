@@ -19,39 +19,31 @@ export type Action =
   | { type: 'tool'; tool: ToolId }
   | { type: 'quest'; id: QuestId }
   | { type: 'dismissErrors' }
-  | { type: 'reset' };
+  | { type: 'fullReset'; zone: ZoneId; startDay: number };
 
-const CLIMATE_NAMES: Record<ClimateMode, string> = {
-  normal: 'Норма', storm: 'Злива', drought: 'Посуха', frost: 'Приморозок −2 °C', wind: 'Вітер 9,5 м/с',
+export const CLIMATE_NAMES: Record<ClimateMode, string> = {
+  normal: 'Норма', storm: 'Злива 40 мм', drought: 'Посуха', heat: 'Спека +33 °C', rainy: 'Затяжні дощі', frost: 'Приморозок −2 °C', wind: 'Вітер 9,5 м/с',
 };
+
+/** Перенесення журналу, помилок і статистики з попереднього стану у новий (нове поле, той самий урок). */
+function carry(prev: SimState, n: SimState): SimState {
+  let seq = prev.seq + 1;
+  n.log = [...prev.log, ...n.log.map((l) => ({ ...l, id: seq++ }))];
+  n.mistakes = [...prev.mistakes];
+  n.diagnostics = [...prev.diagnostics];
+  n.operations = [...prev.operations];
+  n.harvests = [...prev.harvests];
+  n.questHistory = prev.quest ? [...prev.questHistory, prev.quest] : [...prev.questHistory];
+  n.seq = seq;
+  return n;
+}
 
 export function reducer(state: SimState, action: Action): SimState {
   if (action.type === 'restore') return action.state;
-  if (action.type === 'quest') {
-    const q = loadQuest(action.id);
-    if (state.quest) q.questHistory = [...state.questHistory, state.quest];
-    else q.questHistory = state.questHistory;
-    let seq = state.seq + 1;
-    q.log = [...state.log, ...q.log.map((l) => ({ ...l, id: seq++ }))];
-    q.mistakes = [...state.mistakes];
-    q.diagnostics = [...state.diagnostics];
-    q.operations = [...state.operations];
-    q.harvests = [...state.harvests];
-    q.seq = seq;
-    return q;
-  }
-  if (action.type === 'zone' || action.type === 'reset') {
-    const n = action.type === 'zone' ? createInitialState(action.zone, state.day) : createInitialState(state.zone, 95);
-    let seq = state.seq + 1;
-    n.log = [...state.log, ...n.log.map((l) => ({ ...l, id: seq++ }))];
-    n.mistakes = state.mistakes;
-    n.diagnostics = state.diagnostics;
-    n.operations = state.operations;
-    n.questHistory = state.quest ? [...state.questHistory, state.quest] : state.questHistory;
-    n.seq = seq;
-    n.harvests = state.harvests;
-    return n;
-  }
+  if (action.type === 'fullReset') return createInitialState(action.zone, action.startDay);
+  if (action.type === 'quest') return carry(state, loadQuest(action.id));
+  if (action.type === 'zone') return carry(state, createInitialState(action.zone, state.day));
+
   const s: SimState = structuredClone(state);
   s.activeErrors = action.type === 'dismissErrors' ? [] : s.activeErrors;
   switch (action.type) {
@@ -60,7 +52,7 @@ export function reducer(state: SimState, action: Action): SimState {
       break;
     case 'climate':
       s.climate = action.mode;
-      s.climateUntil = 9999;
+      s.climateUntil = 99999;
       addLog(s, 'weather', `Кліматичний режим: ${CLIMATE_NAMES[action.mode]}`);
       if (action.mode !== 'normal') {
         // режим застосовується до поточного дня одразу

@@ -60,6 +60,11 @@ const pctToMm = (s: SimState, l: SoilLayer, pct: number) => (pct / 100) * thick(
 export function infiltrate(s: SimState, rainMm: number): { runoff: number; perched: boolean } {
   let water = rainMm;
   let runoff = 0;
+  if (layer(s, 'surface').temp < -0.5) {
+    // мерзлий ґрунт: талі та дощові води переважно стікають
+    runoff += water * 0.6;
+    water *= 0.4;
+  }
   if (s.crust > 0) {
     runoff += water * 0.45;
     water *= 0.55;
@@ -113,9 +118,12 @@ export function evaporate(s: SimState, et0: number, canopy: number) {
   const surf = layer(s, 'surface');
   // 2-га стадія випаровування: пересохлий поверхневий шар сам стає мульчею
   const dryness = clamp((surf.moisture - 10) / 60, 0.15, 1);
-  const ev = et0 * (1 - canopy) * (1 - s.residue / 140) * dryness;
+  // розпушений шар 3–4 см після боронування/лущення розриває капіляри («закриття вологи»)
+  const loose = s.looseUntil >= s.day ? 0.55 : 1;
+  const ev = et0 * (1 - canopy) * (1 - s.residue / 220) * dryness * loose;
   const sb = layer(s, 'seedbed');
-  const shares: [LayerId, number][] = sb.moisture > 45 ? [['surface', 0.45], ['seedbed', 0.35], ['arable', 0.2]] : [['surface', 0.6], ['seedbed', 0.4]];
+  // у прохолодну пору (ET0 < 1,8 мм) випаровування йде лише з верхніх 8 см
+  const shares: [LayerId, number][] = sb.moisture > 45 && et0 > 1.8 ? [['surface', 0.3], ['seedbed', 0.3], ['arable', 0.4]] : [['surface', 0.6], ['seedbed', 0.4]];
   for (const [id, sh] of shares) {
     const l = layer(s, id);
     l.moisture = Math.max(id === 'surface' ? 6 : 14, l.moisture - mmToPct(s, l, ev * sh));
@@ -179,4 +187,45 @@ export function updateSoilTemps(s: SimState, tAir: number) {
     const target = i >= 4 ? (tAir + deepMean * 2) / 3 : tAir;
     l.temp = round(l.temp + (target - l.temp) * lag[i], 1);
   });
+}
+
+/**
+ * Внутрішньопрофільний перерозподіл вологи: повільний рух униз від вологішого
+ * до сухішого шару (ненасичена фільтрація). Через підошву ≥3 МПа — у 5 разів повільніше.
+ */
+export function redistribute(s: SimState) {
+  for (let i = 0; i < s.layers.length - 1; i++) {
+    const l = s.layers[i];
+    const below = s.layers[i + 1];
+    const grad = l.moisture - below.moisture;
+    if (grad <= 3 || l.moisture < 50) continue;
+    const slow = (below.id === 'pan' || l.id === 'pan') && panBlocking(s) ? 0.6 : 1;
+    const mm = Math.min(pctToMm(s, l, grad * 0.08 * slow), 3);
+    l.moisture -= mmToPct(s, l, mm);
+    below.moisture += mmToPct(s, below, mm);
+  }
+}
+
+/** Усталена швидкість вбирання води (мм/год) для кільцевого інфільтрометра. */
+export function infiltrationRate(s: SimState): { initial: number; steady: number } {
+  const z = ZONES[s.zone];
+  const base = z.fcPerCm < 2.5 ? 55 : 30; // супісок фільтрує швидше
+  const a = layer(s, 'arable');
+  const dens = clamp(1 - (a.density - 1.1) * 1.6, 0.25, 1.2);
+  const wet = clamp(1.25 - a.moisture / 110, 0.25, 1);
+  let steady = base * dens * wet * (1 + s.residue / 200);
+  if (s.crust > 0) steady *= 0.18;
+  if (panBlocking(s)) steady = Math.min(steady, 4.5);
+  if (layer(s, 'surface').temp < -0.5) steady *= 0.1;
+  return { initial: round(steady * 2.6 + 12 * wet, 1), steady: round(steady, 1) };
+}
+
+/** Транспірація бур'янів та самосівки на полі без культури (або в міжряддях). */
+export function weedTranspire(s: SimState, et0: number, weeds: number, cover: number) {
+  const mm = et0 * Math.min(0.55, weeds / 70) * (1 - cover);
+  if (mm <= 0) return;
+  for (const [id, sh] of [['seedbed', 0.35], ['arable', 0.65]] as [LayerId, number][]) {
+    const l = layer(s, id);
+    l.moisture = Math.max(20, l.moisture - mmToPct(s, l, mm * sh * availFrac(l.moisture) * 1.4));
+  }
 }

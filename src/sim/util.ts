@@ -18,16 +18,40 @@ export function hashRand(...parts: (number | string)[]): number {
   return (h >>> 0) / 4294967296;
 }
 
+// ---------------------------------------------------------------------------
+// Календар. `day` — абсолютний номер дня, відлічений від 1 січня START_YEAR (=1).
+// Сезон симуляції починається з довільної дати (state.startDay) і триває 2 роки,
+// щоб озимі (посів восени → збирання наступного літа) повністю вкладались у шкалу.
+// ---------------------------------------------------------------------------
+export const START_YEAR = 2026;
+export const SEASON_LEN = 730;
+
+/** День року 1..365 */
+export const doy = (day: number) => ((((day - 1) % 365) + 365) % 365) + 1;
+export const yearOf = (day: number) => START_YEAR + Math.floor((day - 1) / 365);
+
 const MONTHS = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня'];
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-export function formatDay(day: number): string {
-  let d = day;
+export function monthDay(day: number): [number, number] {
+  let d = doy(day);
   for (let m = 0; m < 12; m++) {
-    if (d <= MONTH_DAYS[m]) return `${d} ${MONTHS[m]}`;
+    if (d <= MONTH_DAYS[m]) return [m, d];
     d -= MONTH_DAYS[m];
   }
-  return `${day}`;
+  return [11, 31];
+}
+
+export function formatDay(day: number, withYear = false): string {
+  const [m, d] = monthDay(day);
+  return `${d} ${MONTHS[m]}${withYear ? ` ${yearOf(day)}` : ''}`;
+}
+
+/** Абсолютний день для дати поточного (стартового) року */
+export function dayOf(month: number, date: number): number {
+  let d = date;
+  for (let m = 0; m < month - 1; m++) d += MONTH_DAYS[m];
+  return d;
 }
 
 export const fmt = (v: number, d = 1) => v.toFixed(d).replace('.', ',');

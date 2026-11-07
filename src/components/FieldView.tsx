@@ -5,7 +5,7 @@ import { useState, type ReactElement } from 'react';
 import { CROPS, LAYER_DEFS, ZONES, gddForBbch } from '../sim/data';
 import { PAN_LIMIT, effRes, layer, panBlocking, productiveMoisture } from '../sim/soil';
 import type { Crop, LayerId, SimState } from '../sim/types';
-import { clamp, fmt, hashRand } from '../sim/util';
+import { clamp, doy, fmt, hashRand } from '../sim/util';
 
 const W = 1000;
 const H = 600;
@@ -15,7 +15,8 @@ const PX_CM_ABOVE = 0.78;
 /** Глибина (см) → y. Шар 0–35 см збільшено ×5.4 відносно глибших горизонтів (шкала на лінійці точна). */
 export const depthY = (cm: number) => (cm <= 35 ? G + cm * 7 : G + 245 + (cm - 35) * (150 / 115));
 
-const PLANT_X = [95, 230, 365, 500, 635, 770, 905];
+const PLANT_X = [70, 180, 290, 400, 510, 620, 730];
+const PROF_X = 762; // колонка «Профіль» (міні-діаграми вологості та опору)
 
 function mix(a: string, b: string, t: number) {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
@@ -102,7 +103,7 @@ function Plant({ c, x, i }: { c: Crop; x: number; i: number }) {
       if (c.bbch < 75) els.push(<path key="silk" d={`M${x + 12} ${cy - 14} q 6 -8 3 -14`} stroke="#c98b5a" fill="none" strokeWidth={1.4} />);
     }
   } else if (c.id === 'wheat') {
-    const tillers = c.bbch >= 21 ? 4 : c.bbch >= 13 ? 2 : 1;
+    const tillers = c.bbch >= 21 ? (c.stand > 115 ? 5 : 4) : c.bbch >= 13 ? 2 : 1;
     for (let t = 0; t < tillers; t++) {
       const dx = (t - (tillers - 1) / 2) * 7;
       const tx = x + dx * 1.8;
@@ -204,7 +205,7 @@ function Plant({ c, x, i }: { c: Crop; x: number; i: number }) {
     if (c.bbch >= 31) els.push(<ellipse key="sh" cx={x} cy={G - 1} rx={clamp(c.bbch * 0.2, 5, 11)} ry={4} fill="#efe6d0" />);
   }
   return (
-    <g style={{ transformOrigin: `${x}px ${G}px`, animation: L.dead ? undefined : `sway ${3 + (i % 3)}s ease-in-out infinite` }}>
+    <g style={{ transformOrigin: `${x}px ${G}px`, transform: c.lodged ? `rotate(${62 + (i % 3) * 8}deg)` : undefined, animation: L.dead || c.lodged ? undefined : `sway ${3 + (i % 3)}s ease-in-out infinite` }}>
       {els}
       {pests()}
       {c.leafFrost > 0.2 && <g fill="#e8f4ff" opacity={0.75}>{Array.from({ length: 5 }, (_, j) => <circle key={j} cx={x + (hashRand(i, j, 'fr') - 0.5) * 40} cy={G - h * hashRand(i, j, 'fy')} r={1.2} />)}</g>}
@@ -306,6 +307,19 @@ function Machine({ s }: { s: SimState }) {
     roll: <g><line x1={-30} y1={-8} x2={-60} y2={-8} stroke="#7d8790" strokeWidth={4} /><circle cx={-85} cy={-4} r={14} fill="#8b949c" stroke="#525a61" strokeWidth={2} /></g>,
     sow: <g><rect x={-120} y={-34} width={84} height={26} rx={3} fill="#2f7d4f" /><line x1={-30} y1={-8} x2={-120} y2={-8} stroke="#7d8790" strokeWidth={4} />{[0, 1, 2].map((k) => <line key={k} x1={-50 - k * 28} y1={-8} x2={-55 - k * 28} y2={depthY(4) - G} stroke="#c0c6cc" strokeWidth={2.4} />)}</g>,
     clear: <g>{[0, 1, 2, 3].map((k) => <ellipse key={k} cx={-50 - k * 20} cy={8} rx={4} ry={12} fill="#9aa4ad" />)}</g>,
+    flatCut: <g><line x1={-30} y1={-8} x2={-115} y2={-8} stroke="#7d8790" strokeWidth={4} />{[0, 1].map((k) => <path key={k} d={`M${-55 - k * 40} -8 l 0 ${depthY(14) - G + 8} l -22 0 l 44 0`} stroke="#c0c6cc" strokeWidth={3} fill="none" />)}</g>,
+    stripTill: <g><line x1={-30} y1={-8} x2={-115} y2={-8} stroke="#7d8790" strokeWidth={4} />{[0, 1, 2].map((k) => <g key={k}><path d={`M${-50 - k * 28} -8 l 0 ${depthY(22) - G + 8}`} stroke="#c0c6cc" strokeWidth={3} /><circle cx={-50 - k * 28 - 8} cy={4} r={7} fill="none" stroke="#9aa4ad" strokeWidth={2} /></g>)}</g>,
+    stubbleDisc: <g><line x1={-30} y1={-10} x2={-120} y2={-10} stroke="#7d8790" strokeWidth={4} />{[0, 1, 2, 3, 4].map((k) => <ellipse key={k} cx={-45 - k * 17} cy={6} rx={3} ry={10} fill="#b0b8bf" stroke="#5d666e" transform={`rotate(18 ${-45 - k * 17} 6)`} />)}</g>,
+    harrow: <g><line x1={-30} y1={-6} x2={-130} y2={-6} stroke="#7d8790" strokeWidth={3} />{Array.from({ length: 12 }, (_, k) => <line key={k} x1={-40 - k * 8} y1={-6} x2={-42 - k * 8} y2={depthY(3.5) - G + 4} stroke="#c0c6cc" strokeWidth={1.6} />)}</g>,
+    mulcher: <g><rect x={-120} y={-26} width={80} height={24} rx={4} fill="#d97706" /><line x1={-30} y1={-14} x2={-40} y2={-14} stroke="#7d8790" strokeWidth={4} />{Array.from({ length: 8 }, (_, k) => <line key={k} x1={-115 + k * 10} y1={-2} x2={-112 + k * 10} y2={4} stroke="#d8bf72" strokeWidth={2} />)}</g>,
+    interRow: <g><line x1={-30} y1={-8} x2={-115} y2={-8} stroke="#7d8790" strokeWidth={4} />{[0, 1].map((k) => <g key={k}><path d={`M${-55 - k * 40} -8 q 0 14 6 ${depthY(7) - G + 6}`} stroke="#c0c6cc" strokeWidth={2.6} fill="none" /><path d={`M${-70 - k * 40} 6 l 10 -10 l 10 10`} stroke="#c0c6cc" strokeWidth={2} fill="none" /></g>)}</g>,
+    spread: (
+      <g>
+        <path d="M-110 -40 l 60 0 l -12 26 l -36 0 z" fill="#2563eb" />
+        <line x1={-30} y1={-10} x2={-50} y2={-10} stroke="#7d8790" strokeWidth={4} />
+        <g className="spray-mist">{Array.from({ length: 22 }, (_, k) => <circle key={k} cx={-80 + (hashRand(k, 'sp') - 0.5) * 140} cy={-8 + hashRand(k, 'sy') * 14} r={1.8} fill="#f1f5f9" />)}</g>
+      </g>
+    ),
     spray: (
       <g>
         <rect x={-95} y={-40} width={55} height={30} rx={8} fill="#e9eef2" />
@@ -348,17 +362,24 @@ export default function FieldView({ state: s }: { state: SimState }) {
   if (w.tMin <= -1.5) { sky = ['#8fa9cc', '#e6f0f8']; skyLabel = 'Приморозок'; }
   if (w.rain >= 3) { sky = ['#36404c', '#748190']; skyLabel = w.rain >= 20 ? 'Злива' : 'Дощ'; }
   else if (s.climate === 'drought' || (w.tMax > 31 && w.humidity < 40)) { sky = ['#d9a85e', '#f5e1ad']; skyLabel = 'Посуха'; }
-  if (s.day < 60 || s.day > 330) skyLabel += ' · зима';
+  const dd = doy(s.day);
+  if (s.snow > 3 || w.snowfall) { sky = w.snowfall ? ['#7c8796', '#c7d0da'] : ['#8fb3d9', '#e7eef6']; skyLabel = w.snowfall ? 'Снігопад' : 'Зима · сніговий покрив'; }
+  else if (dd < 60 || dd > 330) skyLabel += ' · зима';
+  const frozen = surf.temp < -0.5;
 
-  const drops = w.rain >= 0.5 ? Math.min(90, Math.round(w.rain * 2 + 10)) : 0;
+  const drops = w.rain >= 0.5 && !w.snowfall ? Math.min(90, Math.round(w.rain * 2 + 10)) : 0;
+  const flakes = w.snowfall ? Math.min(80, Math.round(w.rain * 8 + 20)) : 0;
   const stand = c && c.emerged ? c.stand : 100;
   const visible = PLANT_X.map((_, k) => hashRand('st', k, c?.sowDay ?? 0) * 100 < stand + 6);
   const destroyed = c?.dead && c.deathCause.startsWith('Знищено');
 
-  const layerFill = (id: LayerId, m: number) => {
-    const base = id === 'parent' ? '#b39566' : id === 'transition' ? mix(z.soilColor, '#9a7a52', 0.45) : id === 'pan' ? mix(z.soilColor, '#5b4a3a', 0.4) : z.soilColor;
-    return mix(base, '#0e0a08', clamp((m - 40) / 120, 0, 0.5));
+  const hz = z.horizon;
+  const baseColor: Record<LayerId, string> = {
+    surface: mix(hz.colors[0], '#8a7a62', 0.25), seedbed: mix(hz.colors[0], '#6b5a44', 0.12), arable: hz.colors[0],
+    pan: hz.colors[1], transition: hz.colors[2], parent: hz.colors[3],
   };
+  // вологий ґрунт темніший, сухий — світліший
+  const layerFill = (id: LayerId, m: number) => mix(mix(baseColor[id], '#d9c9a8', clamp((45 - m) / 90, 0, 0.3)), '#0b0807', clamp((m - 45) / 140, 0, 0.42));
 
   const selLayer = sel ? s.layers.find((l) => l.id === sel)! : null;
   const weedsN = Math.min(40, Math.round(s.weeds / 1.5));
@@ -382,6 +403,31 @@ export default function FieldView({ state: s }: { state: SimState }) {
               <circle cx="2" cy="2" r="0.8" fill="#000" opacity="0.25" />
               <circle cx="6.5" cy="6" r="0.6" fill="#fff" opacity="0.08" />
             </pattern>
+            <pattern id="crumb" width="12" height="10" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="3" r="1.6" fill="#ffffff" opacity="0.07" />
+              <circle cx="9" cy="7" r="1.2" fill="#000" opacity="0.25" />
+              <circle cx="8" cy="2" r="0.7" fill="#000" opacity="0.3" />
+            </pattern>
+            <pattern id="crumbBig" width="18" height="14" patternUnits="userSpaceOnUse">
+              <ellipse cx="5" cy="4" rx="3" ry="2.2" fill="#000" opacity="0.18" />
+              <ellipse cx="13" cy="10" rx="2.5" ry="1.8" fill="#000" opacity="0.22" />
+              <circle cx="11" cy="3" r="0.9" fill="#fff" opacity="0.06" />
+            </pattern>
+            <pattern id="platy" width="22" height="6" patternUnits="userSpaceOnUse">
+              <line x1="1" y1="2" x2="15" y2="2" stroke="#000" strokeWidth="1" opacity="0.35" />
+              <line x1="9" y1="5" x2="21" y2="5" stroke="#fff" strokeWidth="0.6" opacity="0.1" />
+            </pattern>
+            <pattern id="prism" width="26" height="30" patternUnits="userSpaceOnUse">
+              <path d="M4 0 L5 14 L3 30 M17 0 L16 16 L18 30" stroke="#000" strokeWidth="0.9" opacity="0.28" fill="none" />
+              <circle cx="11" cy="9" r="0.8" fill="#000" opacity="0.25" />
+            </pattern>
+            <pattern id="loess" width="10" height="10" patternUnits="userSpaceOnUse">
+              <circle cx="2" cy="3" r="0.6" fill="#5b4632" opacity="0.35" />
+              <circle cx="7" cy="8" r="0.5" fill="#fff" opacity="0.25" />
+            </pattern>
+            <pattern id="wet" width="30" height="8" patternUnits="userSpaceOnUse">
+              <path d="M0 4 q 7 -3 15 0 t 15 0" stroke="#7cc4ff" strokeWidth="0.8" fill="none" opacity="0.35" />
+            </pattern>
             <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
               <line x1="0" y1="0" x2="0" y2="8" stroke="#ef4444" strokeWidth="2.5" opacity="0.6" />
             </pattern>
@@ -398,6 +444,11 @@ export default function FieldView({ state: s }: { state: SimState }) {
               ))}
             </g>
           )}
+          {flakes > 0 && (
+            <g fill="#ffffff" opacity={0.9}>
+              {Array.from({ length: flakes }, (_, k) => <circle key={k} className="rain-drop" cx={(k * 89) % W} cy={(k * 41) % 120} r={1.8} style={{ animationDuration: '2.4s', animationDelay: `${(k % 12) * 0.2}s` }} />)}
+            </g>
+          )}
           {w.wind > 6 && (
             <g stroke="#ffffff" strokeWidth={1.4} opacity={0.6}>
               {Array.from({ length: 8 }, (_, k) => <path key={k} className="wind-streak" d={`M0 ${30 + k * 22} q 40 -8 90 0`} fill="none" style={{ animationDelay: `${k * 0.2}s` }} />)}
@@ -412,20 +463,54 @@ export default function FieldView({ state: s }: { state: SimState }) {
             const l = s.layers.find((x) => x.id === d.id)!;
             const y1 = depthY(d.top);
             const y2 = depthY(d.bottom);
-            const isPan = d.id === 'pan';
-            const red = isPan && effRes(l) >= PAN_LIMIT;
+            const red = d.id === 'pan' && effRes(l) >= PAN_LIMIT;
+            const tex: Record<LayerId, string> = { surface: 'url(#crumb)', seedbed: 'url(#crumb)', arable: 'url(#crumbBig)', pan: 'url(#platy)', transition: 'url(#prism)', parent: 'url(#loess)' };
             return (
               <g key={d.id} onClick={() => setSel(sel === d.id ? null : d.id)} className="cursor-pointer">
                 <rect x={0} y={y1} width={W} height={y2 - y1} fill={layerFill(d.id, l.moisture)} />
-                <rect x={0} y={y1} width={W} height={y2 - y1} fill="url(#grain)" />
+                <rect x={0} y={y1} width={W} height={y2 - y1} fill={tex[d.id]} />
+                {l.moisture > 97 && <rect x={0} y={y1} width={W} height={y2 - y1} fill="url(#wet)" />}
                 {red && <rect x={0} y={y1} width={W} height={y2 - y1} fill="url(#hatch)" className="pan-pulse" />}
                 {red && <rect x={0} y={y1} width={W} height={y2 - y1} fill="#dc2626" opacity={0.28} className="pan-pulse" />}
                 {sel === d.id && <rect x={1} y={y1 + 1} width={W - 2} height={y2 - y1 - 2} fill="none" stroke="#34d399" strokeWidth={2} strokeDasharray="6 4" />}
-                <line x1={0} y1={y2} x2={W} y2={y2} stroke="#00000055" />
                 <title>{`${d.name} (${d.short}): вологість ${fmt(l.moisture, 0)}% НВ, щільність ${fmt(l.density, 2)} г/см³, опір ${fmt(effRes(l), 2)} МПа`}</title>
               </g>
             );
           })}
+          {/* межі горизонтів (хвилясті природні, рівна — дно орного шару) */}
+          <g pointerEvents="none" fill="none">
+            <line x1={0} y1={depthY(2)} x2={W} y2={depthY(2)} stroke="#00000040" />
+            <line x1={0} y1={depthY(8)} x2={W} y2={depthY(8)} stroke="#00000040" strokeDasharray="4 4" />
+            <line x1={0} y1={depthY(30)} x2={W} y2={depthY(30)} stroke="#000000aa" strokeWidth={1.5} />
+            <line x1={0} y1={depthY(35)} x2={W} y2={depthY(35)} stroke="#00000070" />
+            <path d={`M0 ${depthY(80)} ${Array.from({ length: 21 }, (_, k) => `Q ${k * 50 + 25} ${depthY(80) + (k % 2 ? 7 : -7)} ${k * 50 + 50} ${depthY(80)}`).join(' ')}`} stroke="#00000055" strokeWidth={1.4} />
+          </g>
+          {/* гумусові затьоки в горизонті B та ходи дощових черв'яків */}
+          <g pointerEvents="none">
+            {s.zone !== 'polissia' && Array.from({ length: 9 }, (_, k) => {
+              const xx = 40 + k * 82 + hashRand('tong', k) * 30;
+              const len = 18 + hashRand('tl', k) * 30;
+              return <path key={k} d={`M${xx - 9} ${depthY(35)} Q ${xx - 3} ${depthY(35) + len * 0.6} ${xx} ${depthY(35) + len} Q ${xx + 3} ${depthY(35) + len * 0.6} ${xx + 9} ${depthY(35)} Z`} fill={hz.colors[0]} opacity={0.55} />;
+            })}
+            {s.zone === 'polissia' && <rect x={0} y={depthY(35)} width={W} height={depthY(50) - depthY(35)} fill="#e7dcc6" opacity={0.28} />}
+            {Array.from({ length: 7 }, (_, k) => {
+              const xx = 60 + k * 105 + hashRand('worm', k) * 40;
+              const top = depthY(8 + hashRand('wt', k) * 6);
+              const bot = depthY(Math.min(95, 40 + hashRand('wb', k) * 50));
+              return <path key={`w${k}`} d={`M${xx} ${top} q 6 ${(bot - top) * 0.3} -3 ${(bot - top) * 0.55} t 4 ${(bot - top) * 0.45}`} stroke="#1a120c" strokeWidth={2.2} fill="none" opacity={0.45} />;
+            })}
+            {/* карбонати: білоочка, псевдоміцелій, конкреції */}
+            {Array.from({ length: 34 }, (_, k) => {
+              const dep = 50 + hashRand('cb', k) * 100;
+              if (dep < hz.carbonatesFrom) return null;
+              const xx = 15 + hashRand('cx', k) * (PROF_X - 30);
+              return hashRand('ct', k) > 0.5
+                ? <ellipse key={`c${k}`} cx={xx} cy={depthY(dep)} rx={3 + hashRand('cr', k) * 3} ry={2} fill="#f3eee2" opacity={0.75} />
+                : <path key={`c${k}`} d={`M${xx} ${depthY(dep)} l 6 3 l 3 -4 l 7 2`} stroke="#f3eee2" strokeWidth={0.9} fill="none" opacity={0.7} />;
+            })}
+          </g>
+          {/* мерзлий ґрунт */}
+          {frozen && <rect x={0} y={G} width={W} height={depthY(Math.min(30, Math.max(3, -surf.temp * 4))) - G} fill="#bfe1ff" opacity={0.22} pointerEvents="none" />}
 
           {/* кірка */}
           {s.crust > 0 && (
@@ -448,6 +533,12 @@ export default function FieldView({ state: s }: { state: SimState }) {
               return up ? <line key={k} x1={xx} y1={G} x2={xx + 1} y2={G - 7} /> : <line key={k} x1={xx} y1={G - 1} x2={xx + 9} y2={G - 2} />;
             })}
           </g>
+          {/* сніговий покрив */}
+          {s.snow > 0.5 && (
+            <g pointerEvents="none">
+              <path d={`M0 ${G} L0 ${G - Math.min(26, s.snow * 0.9)} ${Array.from({ length: 11 }, (_, k) => `Q ${k * 100 + 50} ${G - Math.min(26, s.snow * 0.9) - 4} ${k * 100 + 100} ${G - Math.min(26, s.snow * 0.9)}`).join(' ')} L ${W} ${G} Z`} fill="#f8fafc" opacity={0.95} />
+            </g>
+          )}
           {/* іній */}
           {w.tMin <= -1.5 && <rect x={0} y={G - 2} width={W} height={4} fill="#eef7ff" opacity={0.8} />}
           {/* калюжі при застої води */}
@@ -493,32 +584,78 @@ export default function FieldView({ state: s }: { state: SimState }) {
 
           <Machine s={s} />
 
+          {/* ---------- колонка «Профіль»: вологість та опір по горизонтах */}
+          <g pointerEvents="none" fontFamily="Inter, sans-serif">
+            <rect x={PROF_X} y={G} width={W - 66 - PROF_X} height={H - G} fill="#020617" opacity={0.72} />
+            <rect x={PROF_X} y={G - 17} width={W - PROF_X} height={17} fill="#020617" opacity={0.85} />
+            <text x={PROF_X + 6} y={G - 5} fill="#e2e8f0" fontSize={10} fontWeight={700}>ПРОФІЛЬ</text>
+            <text x={PROF_X + 62} y={G - 5} fill="#7dd3fc" fontSize={9.5}>▬ волога</text>
+            <text x={PROF_X + 118} y={G - 5} fill="#86efac" fontSize={9.5}>▬ опір</text>
+            <text x={PROF_X + 166} y={G - 5} fill="#94a3b8" fontSize={9.5}>t°</text>
+            {LAYER_DEFS.map((d) => {
+              const l = s.layers.find((x) => x.id === d.id)!;
+              const y1 = depthY(d.top);
+              const y2 = depthY(d.bottom);
+              const h = y2 - y1;
+              const bw = W - 66 - PROF_X - 12;
+              const res = effRes(l);
+              const resCol = res >= PAN_LIMIT ? '#ef4444' : res >= 2.2 ? '#eab308' : '#22c55e';
+              const mid = y1 + h / 2;
+              const bh = Math.min(6, Math.max(2, h / 4));
+              return (
+                <g key={d.id}>
+                  <line x1={PROF_X} y1={y2} x2={W - 66} y2={y2} stroke="#334155" />
+                  <rect x={PROF_X + 6} y={mid - bh - 1} width={bw} height={bh} fill="#1e293b" />
+                  <rect x={PROF_X + 6} y={mid - bh - 1} width={bw * clamp(l.moisture / 120, 0, 1)} height={bh} fill={l.moisture > 80 ? '#38bdf8' : l.moisture < 45 ? '#f59e0b' : '#7dd3fc'} />
+                  <line x1={PROF_X + 6 + bw * (80 / 120)} y1={mid - bh - 2} x2={PROF_X + 6 + bw * (80 / 120)} y2={mid} stroke="#f8fafc" strokeWidth={0.8} opacity={0.6} />
+                  <rect x={PROF_X + 6} y={mid + 1} width={bw} height={bh} fill="#1e293b" />
+                  <rect x={PROF_X + 6} y={mid + 1} width={bw * clamp(res / 4.5, 0, 1)} height={bh} fill={resCol} />
+                  {h >= 30 && (
+                    <>
+                      <text x={PROF_X + 6} y={mid - bh - 4} fill="#bae6fd" fontSize={10} fontFamily="monospace">{fmt(l.moisture, 0)}%</text>
+                      <text x={PROF_X + 6} y={mid + bh + 12} fill={res >= PAN_LIMIT ? '#fecaca' : '#e2e8f0'} fontSize={10} fontFamily="monospace">{fmt(res, 1)} МПа</text>
+                      <text x={W - 72} y={mid + bh + 12} fill="#94a3b8" fontSize={9} textAnchor="end" fontFamily="monospace">{fmt(l.temp, 0)}°</text>
+                    </>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+
           {/* ---------- лінійка глибин */}
           <g pointerEvents="none" fontFamily="monospace" fontSize={11}>
-            <rect x={W - 66} y={G} width={66} height={H - G} fill="#020617" opacity={0.55} />
+            <rect x={W - 66} y={G} width={66} height={H - G} fill="#020617" opacity={0.85} />
             {[0, 2, 8, 15, 20, 30, 35, 50, 80, 100, 120, 150].map((d) => (
               <g key={d}>
                 <line x1={W - 66} y1={depthY(d)} x2={W - 54} y2={depthY(d)} stroke="#e2e8f0" />
                 <text x={W - 50} y={Math.min(H - 3, depthY(d) + 4)} fill="#e2e8f0">{d} см</text>
               </g>
             ))}
+            <text x={W - 62} y={H - 16} fill="#64748b" fontSize={8}>0–35 ×5</text>
           </g>
-          {/* підписи горизонтів */}
+          {/* підписи горизонтів: індекс + назва + ключовий показник */}
           <g pointerEvents="none" fontSize={11} fontFamily="Inter, sans-serif">
-            {LAYER_DEFS.map((d) => {
+            {LAYER_DEFS.map((d, idx) => {
               const l = s.layers.find((x) => x.id === d.id)!;
               const y1 = depthY(d.top);
               const y2 = depthY(d.bottom);
               if (y2 - y1 < 16) return null;
               const red = d.id === 'pan' && effRes(l) >= PAN_LIMIT;
+              const code = d.id === 'arable' || d.id === 'seedbed' ? hz.codes[0] : d.id === 'pan' ? hz.codes[1] : d.id === 'transition' ? hz.codes[2] : hz.codes[3];
+              const label = `${d.short} · ${d.name}`;
+              const yy = d.id === 'arable' ? y1 + 18 : (y1 + y2) / 2 + 4;
               return (
-                <text key={d.id} x={10} y={(y1 + y2) / 2 + 4} fill={red ? '#fecaca' : '#f8fafcd0'} fontWeight={red ? 700 : 500}>
-                  {d.short} · {d.name}
-                  {d.id === 'pan' ? ` · ${fmt(effRes(l), 1)} МПа` : ` · ${fmt(l.moisture, 0)}% НВ`}
-                </text>
+                <g key={d.id}>
+                  <rect x={6} y={yy - 12} width={Math.min(PROF_X - 16, label.length * 5.9 + 16)} height={16} rx={4} fill={red ? '#7f1d1d' : '#020617'} opacity={0.72} />
+                  <text x={12} y={yy} fill={red ? '#fecaca' : '#f8fafc'} fontWeight={red ? 700 : 500}>{label}</text>
+                  {y2 - y1 > 34 && <text x={12} y={yy + 15} fill="#cbd5e1" fontSize={9.5} opacity={0.9}>{idx >= 2 ? code : ''}{d.id === 'pan' ? '' : ''}</text>}
+                </g>
               );
             })}
-            <text x={10} y={G + 9} fill="#f8fafc" fontSize={9}>0–2 см · мульча {s.residue}%{s.crust > 0 ? ` · кірка ${fmt(s.crust)} см` : ''}</text>
+            <g>
+              <rect x={6} y={G + 1} width={240} height={12} rx={3} fill="#020617" opacity={0.6} />
+              <text x={12} y={G + 10} fill="#f8fafc" fontSize={9}>0–2 см · мульча {Math.round(s.residue)}%{s.crust > 0 ? ` · кірка ${fmt(s.crust)} см` : ''}{frozen ? ' · мерзлий' : ''}</text>
+            </g>
           </g>
         </svg>
 
