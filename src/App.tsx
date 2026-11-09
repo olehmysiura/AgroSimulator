@@ -4,7 +4,8 @@ import { reducer, type Action } from './sim/reducer';
 import type { SimState, ToolId, ZoneId } from './sim/types';
 import { dayOf } from './sim/util';
 import TopBar from './components/TopBar';
-import LabPanel from './components/LabPanel';
+import NavRail, { type Section } from './components/NavRail';
+import { ClimateBar, LabView, QuestBanner, QuestsView } from './components/LabPanel';
 import OpsPanel from './components/OpsPanel';
 import FieldView from './components/FieldView';
 import LogDock from './components/LogDock';
@@ -15,7 +16,6 @@ import ResetModal from './components/ResetModal';
 import ExplorePlant from './components/explore/ExplorePlant';
 import ExploreSoil from './components/explore/ExploreSoil';
 import FactorsView from './components/explore/FactorsView';
-import { BarChart3, Layers, Mountain, Sprout } from 'lucide-react';
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => createInitialState('lisostep', dayOf(3, 1)));
@@ -27,7 +27,7 @@ export default function App() {
   const [report, setReport] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0);
-  const [center, setCenter] = useState<'field' | 'plant' | 'soil' | 'yield'>('field');
+  const [center, setCenter] = useState<Section>('field');
   const history = useRef(new Map<number, SimState>());
 
   // «Машина часу»: знімки стану по днях
@@ -97,27 +97,37 @@ export default function App() {
         seek={seek}
         onReport={() => { setPlaying(false); setReport(true); }}
         onReset={() => { setPlaying(false); setResetOpen(true); }}
+        showStats={center === 'field'}
       />
-      <div key={resetKey} className="flex min-h-0 flex-1 flex-col gap-2 p-2 xl:flex-row">
-        <LabPanel state={state} act={act} openTool={openTool} />
-        <main className="relative flex min-h-[460px] min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
-          <div className="flex shrink-0 gap-1 border-b border-slate-800 bg-slate-950/60 p-1">
-            {([['field', 'Поле: розріз', <Layers key="i" className="h-3.5 w-3.5" />], ['plant', 'Дослідження рослини', <Sprout key="i" className="h-3.5 w-3.5" />], ['soil', 'Дослідження ґрунту', <Mountain key="i" className="h-3.5 w-3.5" />], ['yield', 'Урожай і фактори', <BarChart3 key="i" className="h-3.5 w-3.5" />]] as const).map(([id, name, icon]) => (
-              <button key={id} type="button" onClick={() => setCenter(id)} className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${center === id ? 'bg-emerald-600/30 text-emerald-100 ring-1 ring-emerald-500/60' : 'text-slate-300 hover:bg-slate-800'}`}>
-                {icon}
-                {name}
-              </button>
-            ))}
-          </div>
-          {center === 'field' && <FieldView state={state} />}
-          {center === 'plant' && <ExplorePlant state={state} />}
-          {center === 'soil' && <ExploreSoil state={state} />}
-          {center === 'yield' && <FactorsView state={state} />}
-          <ErrorPanel errors={state.activeErrors} onClose={() => act({ type: 'dismissErrors' })} />
-        </main>
-        <OpsPanel state={state} act={act} />
+      <div key={resetKey} className="flex min-h-0 flex-1 flex-col xl:flex-row">
+        <NavRail section={center} onChange={setCenter} badges={{ quests: !!state.quest && !state.quest.solved && !state.quest.failed, log: state.activeErrors.length || undefined }} />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 p-2">
+          {center === 'field' && (
+            <>
+              <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
+                <main className="relative flex min-h-[460px] min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+                  <QuestBanner state={state} onOpen={() => setCenter('quests')} />
+                  <ClimateBar state={state} act={act} />
+                  <FieldView state={state} />
+                  <ErrorPanel errors={state.activeErrors} onClose={() => act({ type: 'dismissErrors' })} />
+                </main>
+                <OpsPanel state={state} act={act} />
+              </div>
+              <LogDock log={state.log} compact={projector} />
+            </>
+          )}
+          {center !== 'field' && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+              {center === 'lab' && <LabView openTool={openTool} />}
+              {center === 'quests' && <QuestsView state={state} act={act} />}
+              {center === 'plant' && <ExplorePlant state={state} />}
+              {center === 'soil' && <ExploreSoil state={state} />}
+              {center === 'yield' && <FactorsView state={state} />}
+              {center === 'log' && <LogDock log={state.log} full />}
+            </div>
+          )}
+        </div>
       </div>
-      <LogDock key={`log${resetKey}`} log={state.log} compact={projector} />
       {tool && toolSnapshot && <InstrumentModal tool={tool} state={toolSnapshot} onClose={() => setTool(null)} />}
       {report && <ReportModal state={state} onClose={() => setReport(false)} />}
       {resetOpen && <ResetModal zone={state.zone} onClose={() => setResetOpen(false)} onConfirm={fullReset} />}

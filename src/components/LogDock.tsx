@@ -14,9 +14,9 @@ export const KIND_STYLE: Record<LogKind, { name: string; dot: string; text: stri
   quest: { name: 'Виклики', dot: 'bg-orange-400', text: 'text-orange-200' },
 };
 
-export default function LogDock({ log, compact = false }: { log: LogEntry[]; compact?: boolean }) {
+export default function LogDock({ log, compact = false, full = false }: { log: LogEntry[]; compact?: boolean; full?: boolean }) {
   const [off, setOff] = useState<Set<LogKind>>(new Set());
-  const items = log.filter((l) => !off.has(l.kind)).slice(-250).reverse();
+  const items = log.filter((l) => !off.has(l.kind)).slice(full ? -600 : -250).reverse();
   const toggle = (k: LogKind) => {
     const n = new Set(off);
     if (n.has(k)) n.delete(k);
@@ -24,7 +24,7 @@ export default function LogDock({ log, compact = false }: { log: LogEntry[]; com
     setOff(n);
   };
   return (
-    <footer className={`mx-2 mb-2 flex ${compact ? 'h-28' : 'h-44'} shrink-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80`}>
+    <footer className={`mx-2 mb-2 flex ${full ? 'min-h-0 flex-1' : `${compact ? 'h-28' : 'h-36'} shrink-0`} flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80`}>
       <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-800 px-3 py-1.5">
         <span className="mr-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-300/90">
           <ScrollText className="h-3.5 w-3.5" /> Бортовий журнал

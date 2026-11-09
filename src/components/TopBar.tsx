@@ -19,11 +19,12 @@ interface Props {
   seek: (d: number) => void;
   onReport: () => void;
   onReset: () => void;
+  showStats: boolean;
 }
 
 const SPEEDS = [1, 3, 7];
 
-export default function TopBar({ state: s, act, playing, setPlaying, speed, setSpeed, projector, setProjector, seek, onReport, onReset }: Props) {
+export default function TopBar({ state: s, act, playing, setPlaying, speed, setSpeed, projector, setProjector, seek, onReport, onReset, showStats }: Props) {
   const w = s.weather;
   const c = s.crop;
   const y = yieldForecast(s);
@@ -94,7 +95,7 @@ export default function TopBar({ state: s, act, playing, setPlaying, speed, setS
         </div>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11">
+      {showStats && <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11">
         <Stat label="Повітря" icon={<Thermometer className="h-3 w-3" />} value={fmt(w.tAir)} unit="°C" tone={w.tMin <= 0 ? 'sky' : w.tMax > 30 ? 'amber' : 'slate'} sub={`мін ${fmt(w.tMin)} / макс ${fmt(w.tMax)}`} />
         <Stat label={`Ґрунт ${c ? fmt(c.depth) : '5'} см`} icon={<ThermometerSun className="h-3 w-3" />} value={fmt(w.tSoil)} unit="°C" tone={w.tSoil < 10 ? 'sky' : 'slate'} />
         <Stat label="Вітер" icon={<Wind className="h-3 w-3" />} value={fmt(w.wind)} unit="м/с" tone={w.wind > 5 ? 'red' : 'slate'} />
@@ -109,7 +110,7 @@ export default function TopBar({ state: s, act, playing, setPlaying, speed, setS
           <FileCheck2 className="h-4 w-4" />
           Атестаційний звіт
         </button>
-      </div>
+      </div>}
     </header>
   );
 }
