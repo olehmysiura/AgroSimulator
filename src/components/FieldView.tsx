@@ -9,7 +9,7 @@ import { clamp, doy, fmt, hashRand } from '../sim/util';
 
 const W = 1000;
 const H = 600;
-const G = 205; // лінія поверхні ґрунту
+export const G = 205; // лінія поверхні ґрунту
 const PX_CM_ABOVE = 0.78;
 
 /** Глибина (см) → y. Шар 0–35 см збільшено ×5.4 відносно глибших горизонтів (шкала на лінійці точна). */
@@ -18,12 +18,18 @@ export const depthY = (cm: number) => (cm <= 35 ? G + cm * 7 : G + 245 + (cm - 3
 const PLANT_X = [70, 180, 290, 400, 510, 620, 730];
 const PROF_X = 762; // колонка «Профіль» (міні-діаграми вологості та опору)
 
-function mix(a: string, b: string, t: number) {
+export function mix(a: string, b: string, t: number) {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
   const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
   const k = clamp(t, 0, 1);
   return '#' + pa.map((v, i) => Math.round(v + (pb[i] - v) * k).toString(16).padStart(2, '0')).join('');
 }
+
+/** Відносна висота рослини: фаза × накопичений відносний ріст (вігор) × ретардант */
+export function plantHeightFrac(c: Crop) {
+  return heightFrac(c) * (0.5 + 0.5 * clamp(c.vigor ?? 1, 0.2, 1)) * (c.retardant ? 0.86 : 1);
+}
+export const plantHeightPx = (c: Crop) => Math.max(8, CROPS[c.id].maxHeight * PX_CM_ABOVE * plantHeightFrac(c));
 
 function heightFrac(c: Crop) {
   const b = c.bbch;
@@ -50,6 +56,12 @@ interface PlantLook {
 
 function lookOf(c: Crop): PlantLook {
   let leaf = mix(CROPS[c.id].color, '#d4c85a', (1 - Math.min(1, c.nStatus)) * 1.4);
+  // симптоми живлення: надлишок N — темна синювата зелень, дефіцит P — антоціан (фіолетовий), K — крайовий опік
+  const f = c.factors ?? {};
+  if (c.nStatus > 1.2) leaf = mix(leaf, '#1f5f3a', 0.35);
+  if ((f.phosphorus ?? 1) < 0.9 && c.bbch < 20) leaf = mix(leaf, '#7a3f78', clamp((0.92 - f.phosphorus) * 4, 0, 0.55));
+  if ((f.potassium ?? 1) < 0.9) leaf = mix(leaf, '#a8843a', clamp((0.92 - f.potassium) * 2.2, 0, 0.35));
+  if ((f.micro ?? 1) < 0.9) leaf = mix(leaf, '#d9e2a0', clamp((0.92 - f.micro) * 2, 0, 0.3));
   if (c.wilting) leaf = mix(leaf, '#7c8a3a', 0.45);
   if (c.bbch >= 80) leaf = mix(leaf, '#c9a646', clamp((c.bbch - 78) / 10, 0, 1));
   if (c.dead) leaf = '#7a5a3a';
@@ -57,10 +69,10 @@ function lookOf(c: Crop): PlantLook {
 }
 
 // --------------------------------------------------------------------------- рослини
-function Plant({ c, x, i }: { c: Crop; x: number; i: number }) {
+export function Plant({ c, x, i }: { c: Crop; x: number; i: number }) {
   const def = CROPS[c.id];
   const L = lookOf(c);
-  const hf = heightFrac(c) * (0.72 + c.health * 0.0028);
+  const hf = plantHeightFrac(c);
   const h = Math.max(8, def.maxHeight * PX_CM_ABOVE * hf);
   const top = G - h;
   const els: ReactElement[] = [];
@@ -214,7 +226,7 @@ function Plant({ c, x, i }: { c: Crop; x: number; i: number }) {
 }
 
 // --------------------------------------------------------------------------- коріння
-function Roots({ c, x, i, blocked }: { c: Crop; x: number; i: number; blocked: boolean }) {
+export function Roots({ c, x, i, blocked }: { c: Crop; x: number; i: number; blocked: boolean }) {
   const yTop = depthY(Math.min(2.5, c.depth));
   const rd = Math.max(c.depth + 1, c.rootDepth);
   const yEnd = depthY(rd);
@@ -269,7 +281,7 @@ function Roots({ c, x, i, blocked }: { c: Crop; x: number; i: number; blocked: b
 }
 
 // --------------------------------------------------------------------------- проростання під землею
-function Germinating({ c, x, i, crust }: { c: Crop; x: number; i: number; crust: number }) {
+export function Germinating({ c, x, i, crust }: { c: Crop; x: number; i: number; crust: number }) {
   const y = depthY(c.depth);
   const gE = gddForBbch(c.id, 10);
   const prog = clamp(c.gdd / gE, 0, 1);

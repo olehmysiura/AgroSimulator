@@ -99,6 +99,33 @@ export interface Crop {
   harvested: boolean;
   seedContact: number;
   seedbedQuality: number;
+  // ---- фізіологічна модель
+  biomass: number; // надземна суха біомаса, т/га
+  lai: number; // листковий індекс, м²/м²
+  vigor: number; // середній відносний ріст від сходів (0..1)
+  vigorW: number;
+  gToday: number; // відносна швидкість росту сьогодні (0..1)
+  gRecent: number; // згладжена за ~тиждень
+  factors: Record<string, number>; // коефіцієнти факторів росту за сьогодні (1 = не лімітує)
+  limiting: string | null; // головний лімітуючий фактор сьогодні
+  perfLoss: [number, number, number]; // втрачена частка росту у 3 фазах
+  ledger: Record<string, [number, number, number]>; // облік втрат за факторами і фазами
+  nUptake: number; // винесено азоту рослинами, кг/га
+  nFixed: number; // у т.ч. біологічна фіксація, кг/га
+}
+
+export interface SeriesPoint {
+  d: number;
+  m: number[]; // вологість 6 горизонтів, % НВ
+  t: number[]; // температура 6 горизонтів
+  nA: number; // N мінеральний у шарі 0–30 см, кг/га
+  rain: number;
+  tAir: number;
+  bio: number;
+  lai: number;
+  g: number;
+  y: number; // прогноз урожаю, % потенціалу
+  bbch: number;
 }
 
 export type LogKind = 'info' | 'op' | 'diag' | 'error' | 'success' | 'weather' | 'quest' | 'warn';
@@ -164,6 +191,9 @@ export interface SimState {
   diagnostics: { day: number; tool: ToolId; relevant: boolean }[];
   operations: { day: number; name: string }[];
   harvests: { day: number; crop: CropId; yield: number; pct: number }[];
+  series: SeriesPoint[]; // щоденний ряд для графіків динаміки
+  freezeThaw: number; // кількість переходів через 0 °C за сезон
+  eroded: number; // змито/видуто дрібнозему, т/га
   anim: Animation | null;
   seq: number;
 }

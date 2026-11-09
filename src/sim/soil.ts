@@ -3,7 +3,7 @@
 // ============================================================================
 import { ZONES } from './data';
 import type { LayerId, SimState, SoilLayer } from './types';
-import { clamp, round } from './util';
+import { clamp, doy, round } from './util';
 
 export const PAN_LIMIT = 3.0; // МПа — поріг блокування коренів та інфільтрації
 export const WP = 30; // % НВ — умовна вологість в'янення для розрахунку продуктивної вологи
@@ -13,7 +13,8 @@ export const thick = (l: SoilLayer) => l.bottom - l.top;
 
 /** Ефективний опір з поправкою на вологість (сухий ґрунт — твердіший). */
 export function effRes(l: SoilLayer): number {
-  const f = clamp(1 + 0.4 * (0.75 - l.moisture / 100), 0.9, 1.2);
+  // міцність ґрунту різко залежить від вологості: мокра підошва м'якша, суха — як цегла
+  const f = clamp(1 + 0.9 * (0.75 - l.moisture / 100), 0.72, 1.35);
   return round(l.resistance * f, 2);
 }
 
@@ -62,8 +63,8 @@ export function infiltrate(s: SimState, rainMm: number): { runoff: number; perch
   let runoff = 0;
   if (layer(s, 'surface').temp < -0.5) {
     // мерзлий ґрунт: талі та дощові води переважно стікають
-    runoff += water * 0.6;
-    water *= 0.4;
+    runoff += water * 0.35;
+    water *= 0.65;
   }
   if (s.crust > 0) {
     runoff += water * 0.45;
@@ -74,7 +75,7 @@ export function infiltrate(s: SimState, rainMm: number): { runoff: number; perch
     const l = s.layers[i];
     if (l.id === 'pan' && panBlocking(s)) {
       // підошва: обмежена фільтрація, решта затримується над нею
-      const pass = Math.min(water, 4);
+      const pass = Math.min(water, 6);
       const back = water - pass;
       const a = layer(s, 'arable');
       const room = pctToMm(s, a, 125 - a.moisture);
@@ -138,38 +139,75 @@ export function evaporate(s: SimState, et0: number, canopy: number) {
 }
 
 /** Транспірація: вода забирається з шарів у межах кореневої зони. Повертає водозабезпечення 0..1. */
-export function transpire(s: SimState, et0: number, canopy: number, rootDepth: number): number {
+/**
+ * Транспірація з компенсацією: корені у вологих шарах добирають воду за ті, що в сухих.
+ * Кожен шар віддає воду без обмежень, доки доступної вологи > 50%, далі — пропорційно.
+ * Повертає відношення фактичної транспірації до потенційної (ETa/ETm, 0..1).
+ */
+export function transpire(s: SimState, et0: number, canopy: number, rootDepth: number, blocked = false, maxRoot = 150): number {
   let wSum = 0;
-  let aSum = 0;
-  const zone: { l: SoilLayer; ov: number }[] = [];
+  let cSum = 0;
+  const zone: { l: SoilLayer; cap: number }[] = [];
   for (const l of s.layers) {
-    const ov = Math.max(0, Math.min(rootDepth, l.bottom) - l.top);
+    let ov = Math.max(0, Math.min(rootDepth, l.bottom) - l.top);
+    // крізь підошву по тріщинах і ходах черв'яків проникає лише ~15% коренів
+    if (blocked && l.top >= 30) ov = Math.max(0, Math.min(maxRoot * 0.6, l.bottom) - l.top) * 0.15;
     if (ov <= 0) continue;
     // глибші шари мають меншу щільність коренів
     const w = ov * (l.top < 30 ? 1 : l.top < 80 ? 0.75 : 0.5);
-    zone.push({ l, ov: w });
+    const cap = w * Math.min(1, availFrac(l.moisture) / 0.5);
+    zone.push({ l, cap });
     wSum += w;
-    aSum += w * availFrac(l.moisture);
+    cSum += cap;
   }
   if (wSum === 0) return 1;
-  const supply = aSum / wSum;
-  const demand = et0 * canopy * clamp(supply * 1.6, 0, 1);
-  for (const { l, ov } of zone) {
-    const share = (ov * availFrac(l.moisture)) / Math.max(0.0001, aSum);
-    l.moisture = Math.max(10, l.moisture - mmToPct(s, l, demand * share));
-  }
-  return supply;
+  const ratio = clamp((1.6 * cSum) / wSum, 0, 1);
+  const actual = et0 * canopy * 1.05 * ratio;
+  for (const { l, cap } of zone) l.moisture = Math.max(10, l.moisture - mmToPct(s, l, (actual * cap) / Math.max(0.0001, cSum)));
+  return ratio;
 }
 
-/** Мінералізація гумусу та промивання. */
-export function nitrogenCycle(s: SimState, tSoil: number) {
+/**
+ * Еталонна евапотранспірація (мм/добу), формула Харгрівса за сонячною радіацією,
+ * з поправкою на вітер і дефіцит вологості повітря.
+ */
+export function refET(s: SimState): number {
+  const w = s.weather;
+  const rs = (13.2 + 11 * Math.cos((2 * Math.PI * (doy(s.day) - 172)) / 365)) * (w.rain > 5 ? 0.4 : w.rain > 0.5 ? 0.55 : w.humidity > 80 ? 0.72 : 0.92);
+  const et = (0.0135 * (w.tAir + 17.8) * rs) / 2.45;
+  return Math.max(0, et * clamp(1.15 - (w.humidity - 60) / 180, 0.8, 1.35) * (1 + 0.035 * (w.wind - 3)));
+}
+
+/** Капілярне підняття: з вологого підорного шару до пересохлого орного (повільно, крізь підошву ще повільніше). */
+export function capillaryRise(s: SimState) {
+  const a = layer(s, 'arable');
+  const b = layer(s, 'transition');
+  if (b.moisture > 60 && a.moisture < 55) {
+    const mm = (panBlocking(s) ? 0.25 : 0.6) * clamp((b.moisture - 55) / 40, 0, 1) * (ZONES[s.zone].fcPerCm < 2.5 ? 0.5 : 1);
+    b.moisture -= mmToPct(s, b, mm);
+    a.moisture += mmToPct(s, a, mm);
+  }
+}
+
+/**
+ * Мінералізація гумусу (амоніфікація + нітрифікація): мг N/кг за добу.
+ * Залежить від температури (Q10 ≈ 2) і вологості (оптимум 60–80% НВ).
+ */
+export function mineralizationRate(l: SoilLayer): number {
+  if (l.temp < 3) return 0;
+  const tF = clamp(2 ** ((l.temp - 25) / 10), 0, 1.2);
+  const mF = l.moisture < 30 ? 0.1 : l.moisture < 60 ? (l.moisture - 30) / 30 * 0.9 + 0.1 : l.moisture <= 85 ? 1 : l.moisture <= 100 ? 1 - (l.moisture - 85) / 15 * 0.5 : 0.25;
+  return 0.052 * l.humus * tF * mF;
+}
+
+/** Біологічна активність ґрунту (дихання), умовні мг CO₂/кг·добу */
+export const respiration = (l: SoilLayer) => round(mineralizationRate(l) * 95 + 2, 0);
+
+export function nitrogenCycle(s: SimState, _tSoil: number) {
   const a = layer(s, 'arable');
   const sb = layer(s, 'seedbed');
-  if (tSoil > 5 && a.moisture > 40 && a.moisture < 105) {
-    const min = 0.018 * a.humus * clamp((tSoil - 5) / 20, 0, 1);
-    a.nitrogen += min;
-    sb.nitrogen += min * 0.8;
-  }
+  a.nitrogen += mineralizationRate(a);
+  sb.nitrogen += mineralizationRate(sb) * 1.1;
   // нітрати з B повільно стікають у C
   const b = layer(s, 'transition');
   const c = layer(s, 'parent');

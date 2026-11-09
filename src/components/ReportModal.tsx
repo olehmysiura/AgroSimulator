@@ -82,9 +82,11 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
             {s.crop ? (
               <>
                 <div className="mb-1 font-semibold">{CROPS[s.crop.id].name}: {fmt(y.tha, 2)} т/га ({y.pct}% від потенціалу {fmt(y.potential)} т/га)</div>
-                {y.factors.map((f) => (
-                  <div key={f.name} className="flex justify-between border-b border-slate-800 py-0.5"><span className="text-slate-400">{f.name}</span><span className={`font-mono ${f.value < 0.9 ? 'text-amber-300' : ''}`}>×{fmt(f.value, 2)}</span></div>
+                <div className="mb-1 text-slate-400">Досяжно без подальших стресів: {fmt(y.secured, 2)} т/га ({y.securedPct}%)</div>
+                {y.losses.map((l) => (
+                  <div key={l.id} className="flex justify-between border-b border-slate-800 py-0.5"><span className="text-slate-400">{l.name}</span><span className="font-mono text-amber-300">−{fmt(l.tha, 2)} т/га ({fmt(l.pct, 0)}%)</span></div>
                 ))}
+                {y.losses.length === 0 && <div className="text-emerald-400">Втрат урожаю не зафіксовано.</div>}
               </>
             ) : <p className="text-slate-500">Культура не висіяна.</p>}
             {s.harvests.map((h, i) => <div key={i} className="mt-1 text-emerald-300">Зібрано {formatDay(h.day, true)}: {CROPS[h.crop].name} — {fmt(h.yield, 2)} т/га ({h.pct}%)</div>)}

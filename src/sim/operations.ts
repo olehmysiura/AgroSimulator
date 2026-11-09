@@ -29,16 +29,14 @@ function wetTrafficCheck(s: SimState, opName: string): boolean {
   const pan = layer(s, 'pan');
   a.density = 1.48;
   a.resistance = densityToRes(1.48);
-  pan.resistance = Math.max(pan.resistance, 3.6);
+  pan.resistance = Math.max(pan.resistance, 4.0);
   pan.density = Math.max(pan.density, 1.55);
   layer(s, 'seedbed').density = Math.max(layer(s, 'seedbed').density, 1.38);
-  const c = liveCrop(s);
-  if (c) c.losses.compaction = (c.losses.compaction ?? 1) * 0.9;
   addMistake(
     s,
     `${opName} на перезволоженому ґрунті (${fmt(a.moisture, 0)}% НВ)`,
     'За вологості понад 80% НВ ґрунт перебуває в пластичному стані: водяні плівки діють як мастило між агрегатами, і тиск коліс трактора (2–4 кг/см²) не розпушує, а спресовує структуру, витискаючи повітря з пор. Ґрунт «мажеться», утворюючи брили та глибу.',
-    'Щільність горизонту A зросла до 1,48 г/см³, на глибині 30–35 см сформовано плужну підошву з опором 3,6 МПа. Погіршено аерацію та інфільтрацію, коріння наступних культур буде блоковане.',
+    'Щільність горизонту A зросла до 1,48 г/см³, на глибині 30–35 см сформовано плужну підошву (≥ 3,6 МПа після підсихання). Погіршено аерацію та інфільтрацію, коріння наступних культур буде блоковане.',
   );
   if (s.quest?.id === 'wetsoil') questFailed(s, 'Техніку виведено на перезволожене поле.');
   return true;
@@ -378,7 +376,6 @@ export function sow(s: SimState, id: CropId, depth: number, seedTreatment: boole
   }
   // ---- соя на кислому ґрунті
   if (id === 'soy' && sb.pH < 5.5) {
-    c.losses.acid = 0.8;
     addMistake(
       s,
       `Посів сої на кислому ґрунті без вапнування (pH ${fmt(sb.pH)})`,
@@ -505,8 +502,8 @@ export function spray(s: SimState, op: SprayOp) {
       break;
     }
     case 'pk': {
-      s.nutrients.P2O5 = round(s.nutrients.P2O5 + 18, 0);
-      s.nutrients.K2O = round(s.nutrients.K2O + 22, 0);
+      s.nutrients.P2O5 = round(s.nutrients.P2O5 + 23, 0);
+      s.nutrients.K2O = round(s.nutrients.K2O + 35, 0);
       if (c) c.health = Math.min(100, c.health + 4);
       addLog(s, 'info', 'Фосфор і калій внесено', `P₂O₅ ${s.nutrients.P2O5} мг/кг, K₂O ${s.nutrients.K2O} мг/кг.`);
       break;
@@ -561,11 +558,11 @@ export function spray(s: SimState, op: SprayOp) {
     }
     case 'postHerbicide': {
       if (c && c.emerged) {
-        const stressed = c.stressUntil >= s.day || c.wilting || c.waterSupply < 0.3;
+        const stressed = c.stressUntil >= s.day || c.wilting || c.waterSupply < 0.45;
         if (stressed) {
           addMistake(
             s,
-            `Страховий гербіцид по стресованій культурі (${c.wilting || c.waterSupply < 0.3 ? 'посуха' : c.stressCause})`,
+            `Страховий гербіцид по стресованій культурі (${c.wilting || c.waterSupply < 0.45 ? 'посуха' : c.stressCause})`,
             'Селективність післясходових гербіцидів базується на тому, що культура швидко детоксикує д.р. ферментами (цитохром P450, глутатіон-S-трансфераза). У рослини, пригніченої приморозком чи посухою, метаболізм і ці ферментні системи загальмовані — гербіцид накопичується в тканинах і діє на культуру як на бур\'ян.',
             'Жорстка фітотоксичність: хлороз, деформація листя, зупинка росту на 10–14 діб; втрата ~18% врожаю.',
           );

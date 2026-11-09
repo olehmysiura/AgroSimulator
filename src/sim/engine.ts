@@ -1,9 +1,10 @@
 // ============================================================================
 // Ядро симуляції: початковий стан, денний такт (Tick = 1 день), прогноз урожаю
 // ============================================================================
-import { CROPS, EMERGENCE_BBCH, EPSH_WEEDS, ZONES, bbchFromGdd, gddForBbch, makeLayers } from './data';
+import { CROPS, EMERGENCE_BBCH, PEST_EPSH, ZONES, bbchFromGdd, densityToRes, gddForBbch, makeLayers } from './data';
+import { dailyGrowth, initPhysiology, lightInterception, mineralN, updateLai, yieldForecast } from './physiology';
 import {
-  drain, evaporate, infiltrate, layer, nitrogenCycle, panBlocking, redistribute, transpire, updateSoilTemps, weedTranspire,
+  capillaryRise, refET, drain, evaporate, infiltrate, layer, nitrogenCycle, panBlocking, redistribute, transpire, updateSoilTemps, weedTranspire,
 } from './soil';
 import type { Crop, CropId, LogKind, Mistake, SimState, ZoneId } from './types';
 import { computeSat, generateWeather, weatherHistory } from './weather';
@@ -54,6 +55,9 @@ export function createInitialState(zone: ZoneId = 'lisostep', startDay = 91): Si
     diagnostics: [],
     operations: [],
     harvests: [],
+    series: [],
+    freezeThaw: 0,
+    eroded: 0,
     anim: null,
     seq: 1,
   };
@@ -84,6 +88,7 @@ export function newCrop(id: CropId, day: number, depth: number, seedTreatment: b
     stressUntil: -1, stressCause: '', disease: 0, fungicideUntil: -1, pests: 0, insecticideUntil: -1,
     nodules: 0, waterSupply: 1, waterIndex: 1, nIndex: 1, wilting: false, losses: {}, dead: false,
     deathCause: '', harvested: false, seedContact: 0.92, seedbedQuality: 0.8, lodged: false, retardant: false, desiccated: false,
+    biomass: 0, lai: 0, vigor: 1, vigorW: 0, gToday: 1, gRecent: 1, factors: {}, limiting: null, perfLoss: [0, 0, 0], ledger: {}, nUptake: 0, nFixed: 0,
   };
 }
 
@@ -98,6 +103,7 @@ export function cropAtBbch(id: CropId, bbch: number, day: number, depth: number,
     c.germPotential = stand;
   }
   c.rootDepth = targetRoot(c);
+  initPhysiology(c);
   return c;
 }
 
@@ -108,11 +114,9 @@ export function targetRoot(c: Crop): number {
   return clamp(c.depth + (def.maxRoot - c.depth) * Math.min(1, (c.gdd / gFull) ** 0.85), c.depth, def.maxRoot);
 }
 
+/** Частка поверхні, затінена посівом = частка перехопленого світла (Бер–Ламберт за LAI). */
 export function canopyCover(c: Crop | null): number {
-  if (!c || !c.emerged || c.dead) return 0;
-  const b = c.bbch;
-  const base = b < 12 ? 0.05 : b < 16 ? 0.15 : b < 30 ? 0.35 : b < 40 ? 0.7 : b < 80 ? 0.92 : 0.5;
-  return clamp(base * (c.stand / 100) * (0.5 + c.health / 200) * (1 - c.leafFrost * 0.7), 0, 0.95);
+  return clamp(lightInterception(c), 0, 0.97);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +142,9 @@ export function tick(s: SimState) {
   if (w.tMin <= -1.5 && d > 85 && d < 290) addLog(s, 'weather', `Приморозок: мінімум ${w.tMin} °C`, 'Радіаційне вихолодження в нічні години, іній на поверхні.');
   if ((mode === 'drought' || mode === 'heat') && s.day % 5 === 0) addLog(s, 'weather', `Повітряна посуха: +${w.tMax} °C`, `Відносна вологість повітря ${w.humidity}%.`);
 
+  const tPrev = layer(s, 'surface').temp;
   updateSoilTemps(s, w.tAir - (s.snow > 5 ? (w.tAir < 0 ? w.tAir * 0.7 : 0) : 0));
+  soilPhysics(s, tPrev);
 
   // ---- сніг: накопичення та весняне сніготанення
   const c = s.crop && !s.crop.dead && !s.crop.harvested ? s.crop : null;
@@ -166,7 +172,8 @@ export function tick(s: SimState) {
   }
   drain(s);
   redistribute(s);
-  const et0 = s.snow > 3 ? 0 : Math.max(0, 0.2 * (w.tAir + 5) * (1 + w.wind * 0.05) * (1 - w.humidity / 200));
+  capillaryRise(s);
+  const et0 = s.snow > 3 ? 0 : refET(s);
   evaporate(s, et0, cover);
   weedTranspire(s, et0, s.weeds, cover);
   nitrogenCycle(s, w.tSoil);
@@ -179,13 +186,78 @@ export function tick(s: SimState) {
   if (w.tSoil > 7 && sb.moisture > 45 && wave) {
     const herb = s.preHerbUntil >= s.day ? 0.15 : 1;
     const shade = 1 - cover * 0.8;
-    s.weeds += (0.2 + s.weeds * 0.012 + s.weedFlush * 0.08) * herb * shade;
+    s.weeds += (0.28 + s.weeds * 0.022 + s.weedFlush * 0.08) * herb * shade;
     s.weedFlush = Math.max(0, s.weedFlush - 0.25);
   }
   if (w.tMin < -4) s.weeds *= 0.85;
   s.weeds = round(clamp(s.weeds, 0, 400), 1);
 
   if (c) growCrop(s, c);
+  recordSeries(s);
+}
+
+/** Фізичні явища в ґрунті: осідання, морозне розпушення, ерозія, денітрифікація. */
+function soilPhysics(s: SimState, tPrev: number) {
+  const z = ZONES[s.zone];
+  const w = s.weather;
+  const surf = layer(s, 'surface');
+  const sb = layer(s, 'seedbed');
+  const a = layer(s, 'arable');
+  const cover = canopyCover(s.crop && !s.crop.dead && !s.crop.harvested ? s.crop : null);
+  // 1) природне осідання розпушеного ґрунту до рівноважної щільності (швидше під дощем)
+  const settle = 0.0012 * (w.rain > 5 && !w.snowfall ? 4 : 1);
+  if (a.density < z.densityA) a.density = round(Math.min(z.densityA, a.density + settle), 3);
+  if (sb.density < z.densityA - 0.06) sb.density = round(Math.min(z.densityA - 0.06, sb.density + settle * 1.5), 3);
+  if (s.seedbedQuality > 0.5 && w.rain > 8) s.seedbedQuality = round(s.seedbedQuality - 0.02, 2);
+  // 2) цикли заморожування–відтавання кришать брили та розущільнюють верхній шар
+  if ((tPrev < 0) !== (surf.temp < 0)) {
+    s.freezeThaw += 1;
+    if (a.density > z.densityA) a.density = round(Math.max(z.densityA, a.density - 0.006), 3);
+    if (sb.density > z.densityA - 0.06) sb.density = round(sb.density - 0.006, 3);
+    if (s.crust > 0) s.crust = round(Math.max(0, s.crust - 0.3), 1);
+  }
+  a.resistance = densityToRes(a.density);
+  // 3) водна ерозія: злива по незахищеній поверхні
+  if (w.rain >= 30 && !w.snowfall && s.residue < 20 && cover < 0.3) {
+    const loss = round((w.rain - 20) * 0.35 * (1 - s.residue / 25), 1);
+    s.eroded = round(s.eroded + loss, 1);
+    for (const l of [surf, sb, a]) l.humus = round(l.humus * (1 - loss * 0.0006), 3);
+    s.nutrients.P2O5 = round(s.nutrients.P2O5 * (1 - loss * 0.001), 1);
+    addLog(s, 'warn', 'Водна ерозія', `Змито ~${loss} т/га дрібнозему з гумусом і фосфором; на схилі — промоїни.`);
+  }
+  // 4) вітрова ерозія: сухий розпилений ґрунт без решток і рослин
+  if (w.wind >= 9 && surf.moisture < 25 && s.residue < 15 && cover < 0.2 && s.snow < 1) {
+    const loss = round(2 + (25 - surf.moisture) * 0.15, 1);
+    s.eroded = round(s.eroded + loss, 1);
+    for (const l of [surf, sb]) l.humus = round(l.humus * (1 - loss * 0.0008), 3);
+    addLog(s, 'warn', 'Вітрова ерозія (пилова буря)', `Видуто ~${loss} т/га верхнього шару; сходи засічені частками ґрунту.`);
+    const c = s.crop;
+    if (c && c.emerged && !c.dead && c.bbch < 16) c.leafFrost = Math.max(c.leafFrost, 0.15);
+  }
+  // 5) денітрифікація: у перезволоженому теплому ґрунті нітрати відновлюються до N₂/N₂O
+  if (a.moisture > 100 && a.temp > 8) {
+    const lost = a.nitrogen * 0.035;
+    a.nitrogen = round(a.nitrogen - lost, 2);
+    sb.nitrogen = round(sb.nitrogen * 0.98, 2);
+  }
+}
+
+function recordSeries(s: SimState) {
+  const c = s.crop && !s.crop.dead ? s.crop : null;
+  s.series.push({
+    d: s.day,
+    m: s.layers.map((l) => Math.round(l.moisture)),
+    t: s.layers.map((l) => round(l.temp, 1)),
+    nA: mineralN(s),
+    rain: s.weather.rain,
+    tAir: s.weather.tAir,
+    bio: c ? round(c.biomass, 2) : 0,
+    lai: c ? c.lai : 0,
+    g: c && c.emerged && !c.harvested ? c.gToday : 1,
+    y: c ? yieldForecast(s).pct : 0,
+    bbch: c ? c.bbch : 0,
+  });
+  if (s.series.length > 760) s.series.splice(0, s.series.length - 760);
 }
 
 function growCrop(s: SimState, c: Crop) {
@@ -229,6 +301,8 @@ function growCrop(s: SimState, c: Crop) {
       c.emerged = true;
       c.corkscrew = false;
       c.stand = round(c.germPotential * (c.crustDays > 0 ? 0.92 : 1), 0);
+      c.biomass = 0.02;
+      updateLai(c);
       addLog(s, 'info', `Сходи: ${def.name}`, `Польова схожість ${c.stand}%. Тривалість посів–сходи: ${s.day - c.sowDay} діб.`);
     }
     return;
@@ -249,39 +323,30 @@ function growCrop(s: SimState, c: Crop) {
   // ---- коріння: обмежується підплужною підошвою ≥3 МПа
   const target = targetRoot(c);
   let rd = c.rootDepth + clamp(target - c.rootDepth, 0, 3);
-  if (panBlocking(s) && rd > 30) {
+  // корені, що вже пройшли крізь підошву (коли вона була вологою й м'якою), ростуть далі
+  if (panBlocking(s) && c.rootDepth <= 30.5 && rd > 30) {
     rd = 30;
     if (!c.rootBlocked) addLog(s, 'warn', 'Ріст коріння сповільнився', `Глибина основної маси коренів ~30 см (культура ${def.name}).`);
     c.rootBlocked = true;
-  } else if (!panBlocking(s)) c.rootBlocked = false;
+  } else if (rd > 30.5) c.rootBlocked = false;
   c.rootDepth = round(rd, 1);
 
   // ---- вода
   const cover = canopyCover(c);
-  const et0 = Math.max(0, 0.2 * (w.tAir + 5) * (1 + w.wind * 0.05) * (1 - w.humidity / 200));
-  const supply = transpire(s, et0, cover, c.rootDepth);
+  const et0 = refET(s);
+  const supply = transpire(s, et0, cover, c.rootDepth, c.rootBlocked, def.maxRoot);
   const heat = w.tMax > 32 ? 0.12 : 0;
   c.waterSupply = round(clamp(supply - heat, 0, 1), 2);
   const wasWilting = c.wilting;
-  c.wilting = c.waterSupply < 0.28 && et0 > 3;
+  c.wilting = c.waterSupply < 0.5 && et0 > 3;
   if (c.wilting && !wasWilting) addLog(s, 'warn', 'Денне в\'янення листя', `Тургор втрачається у полуденні години; t° повітря ${w.tMax} °C.`);
   const critical = c.bbch >= 51 && c.bbch <= 75;
   const wf = clamp(c.waterSupply / 0.5, 0, 1);
   c.waterIndex = round(c.waterIndex * (critical ? 0.985 : 0.993) + wf * (critical ? 0.015 : 0.007), 4);
 
-  // ---- азот
+  // ---- бульбочки сої: активні лише за pH ≥ 5,6 та інокуляції
   const a = layer(s, 'arable');
-  const uptake = c.bbch > 13 && c.bbch < 75 ? 0.06 * cover : 0.01;
-  a.nitrogen = Math.max(1, a.nitrogen - uptake);
-  const nAvail = a.nitrogen + (c.rootDepth > 35 ? layer(s, 'transition').nitrate * 0.5 : 0);
-  let ns = nAvail / def.nNeed;
-  if (c.id === 'soy') {
-    if (c.inoculated && c.bbch >= 12) c.nodules = Math.min(c.nodules + (a.pH < 5.6 ? 0.3 : 1.1), a.pH < 5.6 ? 8 : 28);
-    ns += c.nodules / 20;
-  }
-  c.nStatus = round(clamp(ns, 0.2, 1.45), 2);
-  c.nIndex = round(c.nIndex * 0.99 + clamp(c.nStatus, 0, 1) * 0.01, 4);
-  if (c.retardant && c.health < 100) c.health = Math.min(100, c.health + 0.1);
+  if (c.id === 'soy' && c.inoculated && c.bbch >= 12) c.nodules = Math.min(c.nodules + (a.pH < 5.6 ? 0.3 : 1.1), a.pH < 5.6 ? 8 : 28);
 
   // ---- приморозок
   if (w.tMin <= -1.5) frostEvent(s, c);
@@ -294,8 +359,8 @@ function growCrop(s: SimState, c: Crop) {
     if (wheat && c.bbch >= 25 && c.disease < 1 && doy(s.day) > 80 && doy(s.day) < 200) c.disease = 1;
     if (!wheat && c.bbch >= 30 && c.disease < 0.5) c.disease = 0.5;
     const fav = wet && w.tAir > 9 && w.tAir < 26;
-    const r = wheat ? (fav ? 1.07 : 1.012) : fav ? 1.035 : 1.004;
-    if (c.bbch < 80 && w.tAir > 3) c.disease = round(clamp(c.disease * r + (wet ? (wheat ? 0.08 : 0.03) : 0), 0, wheat ? 92 : 45), 1);
+    const r = wheat ? (fav ? 1.055 : 1.008) : fav ? 1.035 : 1.004;
+    if (c.bbch < 80 && w.tAir > 3) c.disease = round(clamp(c.disease * r + (wet ? (wheat ? 0.08 : 0.03) : 0), 0, wheat ? 70 : 45), 1);
   }
 
   // ---- шкідники
@@ -309,9 +374,9 @@ function growCrop(s: SimState, c: Crop) {
     } else if (c.id === 'rapeseed') {
       if (c.bbch >= 50 && c.bbch < 70 && w.tAir > 11) inc = 0.12 + c.pests * 0.05;
     } else {
-      const warm = w.tAir > 18 ? 0.035 : 0.003;
+      const e = PEST_EPSH[c.id];
       const prot = c.seedTreatment && c.bbch < 16 ? 0.2 : 1;
-      inc = (warm + c.pests * warm * 0.35) * prot - (w.rain > 10 ? c.pests * 0.08 : 0);
+      inc = (w.tAir > 18 ? e * 0.012 + c.pests * 0.02 : e * 0.001) * prot - (w.rain > 10 ? c.pests * 0.08 : 0);
     }
     c.pests = round(clamp(c.pests + inc, 0, 80), 1);
   }
@@ -332,13 +397,10 @@ function growCrop(s: SimState, c: Crop) {
     addLog(s, 'warn', 'Вимерзання озимих', `Мороз ${w.tMin} °C без снігового покриву: частина вузлів кущіння загинула.`);
   }
 
-  // ---- здоров'я
-  let h = c.health;
-  if (c.wilting) h -= 0.6;
-  if (c.disease > 20) h -= 0.3;
-  if (c.stressUntil < s.day) h += 0.8;
+  // ---- ріст: фактори → біомаса, листковий індекс, облік втрат урожаю
+  dailyGrowth(s, c, growth);
+  c.nIndex = round(c.nIndex * 0.99 + clamp(c.nStatus, 0, 1) * 0.01, 4);
   c.leafFrost = Math.max(0, c.leafFrost - 0.03);
-  c.health = round(clamp(h, 5, 100), 1);
 }
 
 function frostEvent(s: SimState, c: Crop) {
@@ -399,49 +461,8 @@ function harvest(s: SimState, c: Crop) {
   addLog(s, 'success', `Збирання врожаю: ${CROPS[c.id].name}`, `Біологічна врожайність ${y.tha} т/га (${y.pct}% від потенціалу), ${formatDay(s.day)}.`);
 }
 
-// ---------------------------------------------------------------------------
-// Прогноз біологічної врожайності
-// ---------------------------------------------------------------------------
-export interface YieldBreakdown {
-  potential: number;
-  tha: number;
-  pct: number;
-  factors: { name: string; value: number }[];
-}
-
-export function standFactor(stand: number): number {
-  if (stand > 115) return clamp(1 - (stand - 115) * 0.004, 0.75, 1); // загущення: конкуренція
-  if (stand >= 85) return 1;
-  if (stand <= 0) return 0;
-  return clamp(1 - ((85 - stand) / 85) ** 1.3 * 1.05, 0, 1);
-}
-
-export function yieldForecast(s: SimState): YieldBreakdown {
-  const c = s.crop;
-  if (!c) return { potential: 0, tha: 0, pct: 0, factors: [] };
-  const def = CROPS[c.id];
-  const potential = round(def.potential * (ZONES[s.zone].potential[c.id] ?? 1), 1);
-  if (c.dead) return { potential, tha: 0, pct: 0, factors: [{ name: 'Загибель посіву', value: 0 }] };
-  const stand = c.emerged ? c.stand : c.germPotential;
-  const factors: { name: string; value: number }[] = [
-    { name: 'Густота стояння', value: standFactor(stand) },
-    { name: 'Водозабезпечення', value: clamp(0.35 + 0.65 * c.waterIndex, 0, 1) },
-    { name: 'Азотне живлення', value: clamp(0.55 + 0.45 * Math.min(1, c.nIndex), 0, 1) },
-    { name: 'Хвороби', value: 1 - Math.min(0.6, (c.disease / 100) * 0.75) },
-    { name: CROPS[c.id].pest.kind === 'mite' ? 'Павутинний кліщ' : 'Шкідники', value: 1 - Math.min(0.4, c.pests * (CROPS[c.id].pest.kind === 'mite' ? 0.006 : c.id === 'rapeseed' ? 0.03 : 0.008)) },
-    { name: 'Бур\'яни', value: 1 - Math.min(0.4, Math.max(0, s.weeds - EPSH_WEEDS) * 0.0045 * (c.emerged && c.bbch > 30 ? 0.5 : 1)) },
-  ];
-  const lossNames: Record<string, string> = {
-    bees: 'Загибель запилювачів', phyto: 'Фітотоксичність гербіциду', frostLeaf: 'Приморозкове пошкодження листя',
-    frostFlower: 'Приморозок у цвітіння', lateSowing: 'Пізній пересів', vernal: 'Відсутність яровизації',
-    mechanical: 'Механічне пошкодження', compaction: 'Ущільнення ґрунту', drift: 'Неефективний захист',
-    lodging: 'Вилягання', desiccEarly: 'Передчасна десикація', acid: 'Кисла реакція ґрунту', retard: 'Пізній ретардант',
-  };
-  for (const [k, v] of Object.entries(c.losses)) factors.push({ name: lossNames[k] ?? k, value: v });
-  const total = factors.reduce((p, f) => p * f.value, 1);
-  const tha = round(potential * total, c.id === 'sugarbeet' ? 1 : 2);
-  return { potential, tha, pct: Math.round(total * 100), factors: factors.map((f) => ({ ...f, value: round(f.value, 3) })) };
-}
+export { yieldForecast, standFactor } from './physiology';
+export type { YieldBreakdown } from './physiology';
 
 // ---------------------------------------------------------------------------
 // Статус ситуаційного виклику

@@ -5,6 +5,7 @@
 import { EPSH_WEEDS, TILLAGE, gddForBbch } from './data';
 import { liveCrop } from './diagnostics';
 import { addLog, createInitialState, cropAtBbch, questFailed, questSolved } from './engine';
+import { initPhysiology, refreshFactors } from './physiology';
 import { layer, panBlocking } from './soil';
 import type { QuestId, SimState, ZoneId } from './types';
 import { generateWeather } from './weather';
@@ -287,11 +288,24 @@ export function loadQuest(id: QuestId): SimState {
     s.crop.rootDepth = 30;
     s.crop.rootBlocked = true;
   }
+  if (s.crop) {
+    // передісторія стресу до моменту виклику
+    const c = s.crop;
+    if (id === 'pan') { c.vigor = 0.8; c.gRecent = 0.3; c.perfLoss = [0.16, 0, 0]; c.ledger = { water: [0.16, 0, 0] }; }
+    if (id === 'septoria') { c.vigor = 0.92; c.gRecent = 0.7; c.perfLoss = [0.03, 0.12, 0]; c.ledger = { disease: [0.03, 0.12, 0] }; }
+    if (id === 'mites') { c.vigor = 0.85; c.gRecent = 0.5; c.perfLoss = [0.1, 0.05, 0]; c.ledger = { water: [0.07, 0.01, 0], pests: [0.03, 0.04, 0] }; }
+    if (id === 'nitrogen') { c.vigor = 0.8; c.gRecent = 0.45; c.perfLoss = [0.08, 0, 0]; c.ledger = { nitrogen: [0.08, 0, 0] }; }
+    if (id === 'weeds') { c.gRecent = 0.75; c.perfLoss = [0.03, 0, 0]; c.ledger = { weeds: [0.03, 0, 0] }; }
+    if (id === 'frost') { c.gRecent = 0.5; }
+    c.vigorW = 0.1;
+    initPhysiology(c);
+  }
   s.weather = generateWeather(s.zone, s.day, s.climate, s.crop?.depth ?? 5);
   if (id === 'frost') s.weather = { ...s.weather, tMin: -2, tAir: 6.5, tMax: 12, tSoil: 1.8, wind: 1.1, rain: 0, humidity: 86, event: 'frost' };
   if (id === 'pan') s.weather = { ...s.weather, tAir: 26, tMax: 31, rain: 0, humidity: 42 };
   if (id === 'coldsoil') s.weather = { ...s.weather, tAir: 8.4, tMin: 1.6, tMax: 17, tSoil: 7.4, rain: 0 };
   if (id === 'wetsoil') s.weather = { ...s.weather, rain: 0, tAir: 9 };
+  if (s.crop) refreshFactors(s, s.crop);
   s.quest = { id, diagnosed: false, solved: false, failed: false, startDay: s.day, notes: [] };
   addLog(s, 'quest', `Ситуаційний виклик: ${q.title}`, q.symptoms.join(' '));
   return s;
