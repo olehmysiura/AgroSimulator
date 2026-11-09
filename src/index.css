@@ -31,3 +31,6 @@ body { color: #e2e8f0; background: #020617; }
 @keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
 
 input[type=range] { accent-color: #10b981; }
+
+@keyframes zoom-in { from { transform: scale(0.35); opacity: 0; filter: blur(6px); } to { transform: scale(1); opacity: 1; filter: blur(0); } }
+.zoom-in { animation: zoom-in 0.45s ease-out; }

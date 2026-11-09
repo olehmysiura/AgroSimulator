@@ -6,8 +6,9 @@ import { LAYER_DEFS, ZONES } from '../../sim/data';
 import { PAN_LIMIT, effRes, productiveMoisture } from '../../sim/soil';
 import { availableNutrients, elements, exchangeComplex, grossChemistry, humusQuality, phases, processes, structure, texture, type Process } from '../../sim/soilscience';
 import type { LayerId, SimState, SoilLayer } from '../../sim/types';
-import { fmt, formatDay, hashRand } from '../../sim/util';
+import { fmt, formatDay } from '../../sim/util';
 import MiniChart from './MiniChart';
+import SoilScales from './SoilScales';
 
 type Tab = 'build' | 'chem' | 'phys' | 'dyn';
 const TABS: [Tab, string][] = [['build', 'Будова і фази'], ['chem', 'Хімічні елементи'], ['phys', 'Фізичні явища'], ['dyn', 'Динаміка']];
@@ -90,14 +91,8 @@ function Build({ s, l }: { s: SimState; l: SoilLayer }) {
   const hq = humusQuality(s.zone);
   return (
     <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <Card title="Ґрунт під мікроскопом (×40): агрегати, пори, вода, повітря">
-        <Micro s={s} l={l} />
-        <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-slate-400">
-          <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-[#6b4f35]" />агрегати</span>
-          <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-sky-400" />вода</span>
-          <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-slate-200" />повітря</span>
-          {ph.ice && <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-cyan-200" />лід</span>}
-        </div>
+      <Card title="Ґрунт під різним збільшенням">
+        <SoilScales s={s} l={l} />
       </Card>
       <div className="flex flex-col gap-2">
         <Card title="Чотири фази ґрунту (% об'єму)">
@@ -122,41 +117,6 @@ function Build({ s, l }: { s: SimState; l: SoilLayer }) {
         </Card>
       </div>
     </div>
-  );
-}
-
-/** Схематичний «шліф»: агрегати, між ними пори з водою/повітрям. Реагує на щільність, вологість, мороз. */
-function Micro({ s, l }: { s: SimState; l: SoilLayer }) {
-  const ph = phases(s, l);
-  const tx = texture(s.zone, l.id);
-  const sat = Math.min(1, ph.water / Math.max(1, ph.porosity)); // частка пор, зайнята водою
-  const pack = 0.72 + (l.density - 1.0) * 0.55; // що щільніше — то більші «зерна» й менші пори
-  const platy = l.id === 'pan' && effRes(l) >= PAN_LIMIT;
-  const crusted = l.id === 'surface' && s.crust > 0;
-  const sandy = tx.sand > 50;
-  const n = 70;
-  const W = 420, H = 250;
-  const col = l.id === 'parent' ? '#b08d5c' : l.id === 'transition' ? '#7a5a3c' : ZONES[s.zone].horizon.colors[0] === '#6e6150' ? '#8a7a62' : '#5a4130';
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded-md">
-      <rect width={W} height={H} fill="#e8edf2" />
-      {/* вода заповнює пори знизу вгору пропорційно насиченню; у дрібних порах — плівки */}
-      <rect y={H * (1 - sat)} width={W} height={H * sat} fill={ph.ice ? '#a5f3fc' : '#38bdf8'} />
-      {Array.from({ length: n }, (_, i) => {
-        const x = ((i * 61) % 10) * 44 + (Math.floor(i / 10) % 2) * 22 + (hashRand(i, 'mx') - 0.5) * 14;
-        const y = Math.floor(i / 10) * 38 + 18 + (hashRand(i, 'my') - 0.5) * 12;
-        const r = (sandy ? 15 : 17) * pack * (0.75 + hashRand(i, 'mr') * 0.5);
-        return (
-          <g key={i}>
-            <ellipse cx={x} cy={y} rx={r * (platy || crusted ? 1.5 : 1)} ry={r * (platy || crusted ? 0.55 : 1)} fill={sandy && i % 3 ? '#d9c08a' : col} stroke={l.moisture > 32 ? (ph.ice ? '#cffafe' : '#7dd3fc') : '#00000030'} strokeWidth={l.moisture > 32 ? 2.2 : 0.6} />
-            {!sandy && Array.from({ length: 3 }, (_, k) => <circle key={k} cx={x + (hashRand(i, k, 'px') - 0.5) * r} cy={y + (hashRand(i, k, 'py') - 0.5) * r * 0.7} r={1.3} fill="#00000050" />)}
-          </g>
-        );
-      })}
-      {ph.ice && Array.from({ length: 14 }, (_, i) => <text key={i} x={(i * 83) % W} y={30 + ((i * 47) % (H - 40))} fontSize={16} fill="#ecfeff">✳</text>)}
-      {l.humus > 2.5 && l.id !== 'parent' && !ph.ice && l.temp > 5 && <path d={`M20 ${H * 0.4} q 60 -30 120 6 t 130 -10 t 120 20`} stroke="#f8fafc" strokeWidth={1} fill="none" strokeDasharray="2 3" opacity={0.8} />}
-      <text x={8} y={H - 8} fontSize={11} fill="#0f172a" fontFamily="monospace">пори: {ph.porosity}% · вода займає {Math.round(sat * 100)}% пор{platy ? ' · плитчаста будова' : ''}{crusted ? ' · кірка' : ''}</text>
-    </svg>
   );
 }
 
