@@ -334,7 +334,7 @@ export function evaluateQuest(s: SimState, ev: QEvent) {
       if (is('till', 'chisel') && ev.pre.pan && c && ok) questSolved(s, 'Глибоке розпушування відкрило корінню доступ до вологи горизонту B.');
       break;
     case 'septoria':
-      if (is('spray', 'fungicide') && ok && (ev.eff ?? 0) >= 0.99) questSolved(s, 'Фунгіцид внесено без знесення: розвиток септоріозу зупинено, верхні листки захищено.');
+      if (is('spray', 'fungicide') && ok && (ev.eff ?? 0) >= 0.7) questSolved(s, 'Фунгіцид внесено без знесення: розвиток септоріозу зупинено, верхні листки захищено.');
       break;
     case 'nitrogen':
       if (is('spray', 'nitrogen') && c && ok) questSolved(s, 'Азот повернуто в зону активних коренів — посів відновить забарвлення за 7–10 діб.');

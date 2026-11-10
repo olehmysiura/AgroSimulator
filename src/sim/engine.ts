@@ -56,6 +56,7 @@ export function createInitialState(zone: ZoneId = 'lisostep', startDay = 91): Si
     operations: [],
     harvests: [],
     series: [],
+    treatments: [],
     freezeThaw: 0,
     eroded: 0,
     anim: null,
@@ -88,7 +89,7 @@ export function newCrop(id: CropId, day: number, depth: number, seedTreatment: b
     stressUntil: -1, stressCause: '', disease: 0, fungicideUntil: -1, pests: 0, insecticideUntil: -1,
     nodules: 0, waterSupply: 1, waterIndex: 1, nIndex: 1, wilting: false, losses: {}, dead: false,
     deathCause: '', harvested: false, seedContact: 0.92, seedbedQuality: 0.8, lodged: false, retardant: false, desiccated: false,
-    biomass: 0, lai: 0, vigor: 1, vigorW: 0, gToday: 1, gRecent: 1, factors: {}, limiting: null, perfLoss: [0, 0, 0], ledger: {}, nUptake: 0, nFixed: 0,
+    apps: {}, residue: false, biomass: 0, lai: 0, vigor: 1, vigorW: 0, gToday: 1, gRecent: 1, factors: {}, limiting: null, perfLoss: [0, 0, 0], ledger: {}, nUptake: 0, nFixed: 0,
   };
 }
 
@@ -457,8 +458,8 @@ function harvest(s: SimState, c: Crop) {
   const y = yieldForecast(s);
   c.harvested = true;
   s.residue = c.id === 'soy' || c.id === 'sugarbeet' ? 25 : 80;
-  s.harvests.push({ day: s.day, crop: c.id, yield: y.tha, pct: y.pct });
-  addLog(s, 'success', `Збирання врожаю: ${CROPS[c.id].name}`, `Біологічна врожайність ${y.tha} т/га (${y.pct}% від потенціалу), ${formatDay(s.day)}.`);
+  s.harvests.push({ day: s.day, crop: c.id, yield: y.tha, pct: y.pct, residue: c.residue });
+  addLog(s, 'success', `Збирання врожаю: ${CROPS[c.id].name}`, `Біологічна врожайність ${y.tha} т/га (${y.pct}% від потенціалу), ${formatDay(s.day)}.${c.residue ? ' Увага: строк очікування після обробки ЗЗР порушено — залишки в продукції можуть перевищувати МДР.' : ''}`);
 }
 
 export { yieldForecast, standFactor } from './physiology';

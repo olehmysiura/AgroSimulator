@@ -14,7 +14,7 @@ export type Action =
   | { type: 'sow'; crop: CropId; depth: number; seedTreatment: boolean; inoculated: boolean }
   | { type: 'clear' }
   | { type: 'till'; op: TillageOp }
-  | { type: 'spray'; op: SprayOp }
+  | { type: 'spray'; op: SprayOp; dose?: number }
   | { type: 'sprayMode'; mode: SprayMode }
   | { type: 'tool'; tool: ToolId }
   | { type: 'quest'; id: QuestId }
@@ -33,6 +33,7 @@ function carry(prev: SimState, n: SimState): SimState {
   n.diagnostics = [...prev.diagnostics];
   n.operations = [...prev.operations];
   n.harvests = [...prev.harvests];
+  n.treatments = [...prev.treatments];
   n.questHistory = prev.quest ? [...prev.questHistory, prev.quest] : [...prev.questHistory];
   n.seq = seq;
   return n;
@@ -74,7 +75,7 @@ export function reducer(state: SimState, action: Action): SimState {
       break;
     case 'spray':
       s.activeErrors = [];
-      spray(s, action.op);
+      spray(s, action.op, action.dose);
       break;
     case 'sprayMode':
       setSprayMode(s, action.mode);

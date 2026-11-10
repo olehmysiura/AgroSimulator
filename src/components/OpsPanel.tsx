@@ -5,9 +5,11 @@ import { useState, type ReactNode } from 'react';
 import { CROPS, CROP_ORDER, SPRAYS, TILLAGE, type SprayGroup } from '../sim/data';
 import { liveCrop } from '../sim/diagnostics';
 import { effectiveWind } from '../sim/operations';
+import { daysToHarvest, forecast, workTemp } from '../sim/spraying';
+import { layer } from '../sim/soil';
 import type { Action } from '../sim/reducer';
 import type { CropId, SimState, SprayOp, TillageOp } from '../sim/types';
-import { fmt } from '../sim/util';
+import { fmt, round } from '../sim/util';
 import { Btn } from './ui';
 
 type Tab = 'sow' | 'soil' | 'zzr' | 'nutr';
@@ -40,15 +42,59 @@ const SPRAY_GROUPS: { id: SprayGroup; name: string; tab: Tab }[] = [
   { id: 'nutr', name: 'Добрива, меліоранти, біостимулятори', tab: 'nutr' },
 ];
 
-function OpButton({ icon, name, detail, onClick, hover }: { icon: ReactNode; name: string; detail: string; onClick: () => void; hover: string }) {
+function OpButton({ icon, name, detail, onClick, hover, active }: { icon: ReactNode; name: string; detail: string; onClick: () => void; hover: string; active?: boolean }) {
   return (
-    <button type="button" onClick={onClick} className={`flex items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-900 p-2 text-left transition hover:bg-slate-800 ${hover}`}>
+    <button type="button" onClick={onClick} className={`flex items-center gap-2.5 rounded-lg border p-2 text-left transition hover:bg-slate-800 ${active ? 'border-violet-500/70 bg-violet-950/40' : 'border-slate-800 bg-slate-900'} ${hover}`}>
       <span className="shrink-0">{icon}</span>
       <div className="min-w-0">
         <div className="text-xs font-semibold leading-tight text-slate-100">{name}</div>
         <div className="text-[10px] text-slate-400">{detail}</div>
       </div>
     </button>
+  );
+}
+
+const Cond = ({ k, v, bad }: { k: ReactNode; v: ReactNode; bad?: boolean }) => (
+  <div className="flex justify-between gap-1 border-b border-slate-800/70 py-0.5">
+    <span className="text-slate-400">{k}</span>
+    <span className={`font-mono ${bad ? 'text-amber-300' : 'text-slate-200'}`}>{v}</span>
+  </div>
+);
+
+/** Налаштування обробки: норма витрати + регламент препарату. */
+function SprayConfig({ s, op, dose, setDose, onApply }: { s: SimState; op: SprayOp; dose: number; setDose: (d: number) => void; onApply: (d: number) => void }) {
+  const d = SPRAYS[op];
+  const [lo, hi] = d.rate;
+  const min = Math.max(d.step, round(lo * 0.25, 3));
+  const max = round(hi * 2, 3);
+  const pct = (v: number) => ((v - min) / (max - min)) * 100;
+  const dec = d.step < 0.1 ? 2 : d.step < 1 ? 1 : 0;
+  const c = liveCrop(s);
+  const used = c?.apps[op] ?? 0;
+  const tone = dose < lo * 0.95 || dose > hi * 1.05 ? 'text-amber-300' : 'text-emerald-300';
+  return (
+    <div className="mt-1 rounded-lg border border-violet-800/60 bg-slate-950 p-2 text-[11px]">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-slate-400">Норма витрати</span>
+        <span className={`font-mono text-sm font-bold ${tone}`}>{fmt(dose, dec)} {d.unit}</span>
+      </div>
+      <div className="relative">
+        <div className="absolute top-[9px] h-1.5 rounded bg-emerald-600/40" style={{ left: `${pct(lo)}%`, width: `${pct(hi) - pct(lo)}%` }} />
+        <input type="range" min={min} max={max} step={d.step} value={dose} onChange={(e) => setDose(+e.target.value)} className="relative w-full" aria-label={`Норма: ${d.name}`} />
+      </div>
+      <div className="flex justify-between font-mono text-[9px] text-slate-500"><span>{fmt(min, dec)}</span><span className="text-emerald-400/80">рекомендовано {fmt(lo, dec)}–{fmt(hi, dec)}</span><span>{fmt(max, dec)}</span></div>
+      <dl className="mt-1.5 grid grid-cols-2 gap-x-2">
+        <Cond k="Спосіб дії" v={d.mode === 'systemic' ? 'системний' : d.mode === 'contact' ? 'контактний' : d.mode === 'soil' ? 'ґрунтовий' : 'добриво'} />
+        {d.rainfast > 0 && <Cond k="Дощостійкість" v={`${d.rainfast} год`} />}
+        {d.tOpt[0] > -40 && <Cond k="t° обробки" v={`${d.tOpt[0]}…${d.tOpt[1]} °C`} />}
+        {d.phi > 0 && <Cond k="Строк очікування" v={`${d.phi} діб`} />}
+        {d.maxApps > 0 && <Cond k="Кратність" v={`${used} з ${d.maxApps}`} bad={used >= d.maxApps} />}
+        {d.moa && <Cond k="Механізм дії" v={d.moa} />}
+      </dl>
+      <button type="button" onClick={() => onApply(dose)} className="mt-2 w-full rounded-md bg-violet-600 px-2 py-1.5 font-semibold text-white hover:bg-violet-500">
+        {d.spreader ? 'Внести' : 'Обприскати'}: {fmt(dose, dec)} {d.unit}
+      </button>
+    </div>
   );
 }
 
@@ -62,6 +108,9 @@ export default function OpsPanel({ state: s, act }: { state: SimState; act: (a: 
   const [inoc, setInoc] = useState(false);
   const live = liveCrop(s);
   const wind = effectiveWind(s);
+  const fc = forecast(s);
+  const [sel, setSel] = useState<SprayOp | null>(null);
+  const [doses, setDoses] = useState<Partial<Record<SprayOp, number>>>({});
 
   const tabs: [Tab, string, ReactNode][] = [
     ['sow', 'Посів', <Wheat key="i" className="h-3.5 w-3.5" />],
@@ -141,20 +190,25 @@ export default function OpsPanel({ state: s, act }: { state: SimState; act: (a: 
                 <Btn active={s.sprayMode === 'day'} onClick={() => act({ type: 'sprayMode', mode: 'day' })}><Sun className="h-3.5 w-3.5" />Денна зміна</Btn>
                 <Btn active={s.sprayMode === 'evening'} onClick={() => act({ type: 'sprayMode', mode: 'evening' })} className="leading-tight"><Moon className="h-3.5 w-3.5" />Вечірня + інжекторні</Btn>
               </div>
-              <div className="mt-1.5 flex justify-between text-[11px]">
-                <span className="flex items-center gap-1 text-slate-400"><Wind className="h-3 w-3" />Вітер під час роботи:</span>
-                <span className={`font-mono font-semibold ${wind > 5 ? 'text-red-400' : 'text-emerald-300'}`}>{fmt(wind)} м/с</span>
-              </div>
-              <div className="flex justify-between text-[11px]">
-                <span className="text-slate-400">Температура / RH:</span>
-                <span className="font-mono text-slate-200">{s.sprayMode === 'evening' ? fmt(Math.min(s.weather.tAir, s.weather.tMax - 4)) : fmt(s.weather.tMax)} °C / {s.weather.humidity}%</span>
+              <div className="mt-1.5 grid grid-cols-2 gap-x-2 text-[11px]">
+                <Cond k={<><Wind className="mr-0.5 inline h-3 w-3" />Вітер</>} v={`${fmt(wind)} м/с`} bad={wind > 5} />
+                <Cond k="t° роботи" v={`${fmt(workTemp(s), 0)} °C`} bad={workTemp(s) > 27 || workTemp(s) < 6} />
+                <Cond k="Опади сьогодні" v={s.weather.snowfall ? `сніг ${fmt(s.weather.rain, 1)}` : `${fmt(s.weather.rain, 1)} мм`} bad={s.weather.rain >= 1} />
+                <Cond k="Прогноз на завтра" v={fc.snowfall ? `сніг ${fmt(fc.rain, 0)} мм` : `${fmt(fc.rain, 0)} мм · ${fmt(fc.tMax, 0)} °C`} bad={fc.rain >= 5} />
+                <Cond k="Вологість повітря" v={`${s.weather.humidity}%`} />
+                <Cond k="Поверхня" v={s.snow > 3 ? 'сніг' : layer(s, 'surface').temp < -0.5 ? 'мерзла' : 'талий ґрунт'} bad={s.snow > 3 || layer(s, 'surface').temp < -0.5} />
+                {live && <Cond k="Фаза культури" v={`BBCH ${live.bbch}`} />}
+                {live && live.emerged && <Cond k="До збирання" v={`≈${daysToHarvest(s, live)} діб`} />}
               </div>
             </div>
             {SPRAY_GROUPS.filter((g) => g.tab === tab).map((g) => (
               <div key={g.id} className="flex flex-col gap-1.5">
                 <GroupTitle>{g.name}</GroupTitle>
                 {(Object.keys(SPRAYS) as SprayOp[]).filter((op) => SPRAYS[op].group === g.id).map((op) => (
-                  <OpButton key={op} icon={SPRAY_ICONS[op]} name={SPRAYS[op].name} detail={SPRAYS[op].detail} onClick={() => act({ type: 'spray', op })} hover="hover:border-violet-600/60" />
+                  <div key={op} className="flex flex-col">
+                    <OpButton icon={SPRAY_ICONS[op]} name={SPRAYS[op].name} detail={`${SPRAYS[op].detail} · ${fmt(doses[op] ?? SPRAYS[op].def, SPRAYS[op].step < 0.1 ? 2 : SPRAYS[op].step < 1 ? 1 : 0)} ${SPRAYS[op].unit}`} onClick={() => setSel(sel === op ? null : op)} hover="hover:border-violet-600/60" active={sel === op} />
+                    {sel === op && <SprayConfig s={s} op={op} dose={doses[op] ?? SPRAYS[op].def} setDose={(d) => setDoses({ ...doses, [op]: d })} onApply={(d) => act({ type: 'spray', op, dose: d })} />}
+                  </div>
                 ))}
               </div>
             ))}

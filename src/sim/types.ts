@@ -110,8 +110,19 @@ export interface Crop {
   limiting: string | null; // головний лімітуючий фактор сьогодні
   perfLoss: [number, number, number]; // втрачена частка росту у 3 фазах
   ledger: Record<string, [number, number, number]>; // облік втрат за факторами і фазами
+  apps: Partial<Record<SprayOp, number>>; // кількість обробок кожним препаратом за сезон
+  residue: boolean; // порушено строк очікування — залишки понад МДР
   nUptake: number; // винесено азоту рослинами, кг/га
   nFixed: number; // у т.ч. біологічна фіксація, кг/га
+}
+
+export interface Treatment {
+  day: number;
+  op: SprayOp;
+  dose: number;
+  eff: number; // фактична ефективність 0..1
+  bbch: number | null;
+  notes: string[];
 }
 
 export interface SeriesPoint {
@@ -190,7 +201,8 @@ export interface SimState {
   questHistory: QuestState[];
   diagnostics: { day: number; tool: ToolId; relevant: boolean }[];
   operations: { day: number; name: string }[];
-  harvests: { day: number; crop: CropId; yield: number; pct: number }[];
+  harvests: { day: number; crop: CropId; yield: number; pct: number; residue?: boolean }[];
+  treatments: Treatment[]; // журнал обробок ЗЗР і добрив
   series: SeriesPoint[]; // щоденний ряд для графіків динаміки
   freezeThaw: number; // кількість переходів через 0 °C за сезон
   eroded: number; // змито/видуто дрібнозему, т/га

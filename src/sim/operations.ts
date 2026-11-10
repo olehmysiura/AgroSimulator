@@ -5,6 +5,7 @@ import { CROPS, SPRAYS, TILLAGE, TOOLS, densityToRes } from './data';
 import { detectCrisis, liveCrop, toolRelevance } from './diagnostics';
 import { addLog, addMistake, newCrop, questFailed } from './engine';
 import { evaluateQuest, type QPre } from './quests';
+import { applicationConditions, workTemp } from './spraying';
 import { PAN_LIMIT, effRes, layer, panBlocking } from './soil';
 import type { CropId, SimState, SprayMode, SprayOp, TillageOp, ToolId } from './types';
 import { clamp, doy, fmt, round } from './util';
@@ -456,8 +457,9 @@ export function effectiveWind(s: SimState) {
   return s.sprayMode === 'evening' ? Math.min(s.weather.wind, 2.1) : s.weather.wind;
 }
 
-export function spray(s: SimState, op: SprayOp) {
+export function spray(s: SimState, op: SprayOp, doseIn?: number) {
   const def = SPRAYS[op];
+  const dose = doseIn ?? def.def;
   const p = pre(s);
   if (s.crop && (s.crop.dead || (s.crop.harvested && op !== 'desiccant'))) s.crop = null;
   const c = liveCrop(s);
@@ -465,31 +467,26 @@ export function spray(s: SimState, op: SprayOp) {
   recordOp(s, def.name);
   if (def.spreader) anim(s, 'spread');
   else anim(s, 'spray', { drift: wind > 5, evening: s.sprayMode === 'evening' });
-  addLog(s, 'op', def.name, def.spreader ? `${def.detail}; відцентровий розкидач.` : `${def.detail}; ${s.sprayMode === 'evening' ? 'вечірня зміна, інжекторні розпилювачі' : 'денна зміна'}; вітер ${fmt(wind)} м/с.`);
+  addLog(s, 'op', `${def.name}: ${fmt(dose, dose < 1 ? 2 : 1)} ${def.unit}`, def.spreader ? `${def.detail}; відцентровий розкидач.` : `${def.detail}; ${s.sprayMode === 'evening' ? 'вечірня зміна, інжекторні розпилювачі' : 'денна зміна'}; вітер ${fmt(wind)} м/с, t° ${fmt(workTemp(s), 0)} °C, опади ${fmt(s.weather.rain, 1)} мм.`);
 
-  let eff = 1;
-  if (!def.spreader && wind > 5) {
-    eff = 0.35;
-    addMistake(
-      s,
-      `Обприскування (${def.name}) при вітрі ${fmt(wind)} м/с`,
-      'За швидкості вітру понад 4–5 м/с дрібні краплі (<150 мкм) зі стандартних щілинних розпилювачів горизонтально зносяться повітряним потоком і випаровуються до осідання на листя. Утворюється «хмара» препарату, що дрейфує на сотні метрів.',
-      '≈65% препарату знесено вітром за межі поля (ризик для сусідніх культур, пасік, водойм). Фактична ефективність обробки — лише 35%.',
-    );
-    if (c) c.losses.drift = (c.losses.drift ?? 1) * 0.99;
-  }
-  if (!def.spreader && s.weather.tMax > 27 && s.sprayMode === 'day' && ['postHerbicide', 'fungicide', 'insecticide', 'acaricide', 'micro', 'nitrogen'].includes(op)) {
-    eff *= 0.75;
-    addLog(s, 'warn', 'Обприскування у спеку', `Температура +${fmt(s.weather.tMax)} °C: краплі випаровуються до поглинання, продихи закриті — ефективність знижена.`);
-  }
+  const cond = applicationConditions(s, op, dose);
+  let eff = cond.eff;
+  const k = dose / def.def; // кількість добрива відносно рекомендованої
   const sb = layer(s, 'seedbed');
   const a = layer(s, 'arable');
   const pestKind = c ? CROPS[c.id].pest.kind : 'insect';
   switch (op) {
     case 'nitrogen': {
-      a.nitrogen += 12 * eff;
-      sb.nitrogen += 6 * eff;
-      layer(s, 'surface').nitrogen += 4 * eff;
+      a.nitrogen += 12 * k * eff;
+      sb.nitrogen += 6 * k * eff;
+      layer(s, 'surface').nitrogen += 4 * k * eff;
+      if (dose > 60) {
+        // разова доза понад потребу: надлишок нітратів швидко переміщується вглиб
+        const extra = (dose - 60) / 40 * 12 * 0.35 * eff;
+        a.nitrogen -= extra;
+        layer(s, 'transition').nitrate += extra * 0.6;
+        addLog(s, 'warn', 'Висока разова доза азоту', `${fmt(dose, 0)} кг N/га за раз: рослини поглинають 2–4 кг N/га на добу, частина нітратів переміститься за межі кореневої зони. Ефективніше — дробне внесення.`);
+      }
       if (c && c.emerged && c.nStatus > 1.15) {
         addMistake(
           s,
@@ -502,16 +499,16 @@ export function spray(s: SimState, op: SprayOp) {
       break;
     }
     case 'pk': {
-      s.nutrients.P2O5 = round(s.nutrients.P2O5 + 23, 0);
-      s.nutrients.K2O = round(s.nutrients.K2O + 35, 0);
-      if (c) c.health = Math.min(100, c.health + 4);
+      s.nutrients.P2O5 = round(s.nutrients.P2O5 + 23 * k * eff, 0);
+      s.nutrients.K2O = round(s.nutrients.K2O + 35 * k * eff, 0);
       addLog(s, 'info', 'Фосфор і калій внесено', `P₂O₅ ${s.nutrients.P2O5} мг/кг, K₂O ${s.nutrients.K2O} мг/кг.`);
       break;
     }
     case 'micro': {
-      s.nutrients.B = round(s.nutrients.B + 0.15 * eff, 2);
-      s.nutrients.Zn = round(s.nutrients.Zn + 0.2 * eff, 2);
-      if (c && c.emerged) c.health = Math.min(100, c.health + 6 * eff);
+      const km = Math.min(k, 1.6);
+      s.nutrients.B = round(s.nutrients.B + 0.15 * km * eff, 2);
+      s.nutrients.Zn = round(s.nutrients.Zn + 0.2 * km * eff, 2);
+      if (c && c.emerged) c.health = Math.min(100, c.health + 6 * km * eff);
       addLog(s, 'info', 'Мікроелементи внесено по листу', 'B, Zn, Mn у хелатній формі поглинаються листком за 2–6 год.');
       break;
     }
@@ -526,7 +523,7 @@ export function spray(s: SimState, op: SprayOp) {
         s.nutrients.Zn = round(s.nutrients.Zn * 0.8, 2);
         s.nutrients.B = round(s.nutrients.B * 0.85, 2);
       }
-      for (const l of s.layers.slice(0, 3)) l.pH = round(Math.min(7.4, l.pH + 0.9), 1);
+      for (const l of s.layers.slice(0, 3)) l.pH = round(Math.min(7.4, l.pH + 0.225 * dose * eff), 1);
       addLog(s, 'info', 'Вапняне борошно внесено', `pH шару 0–30 см: ${fmt(a.pH)}.`);
       break;
     }
@@ -596,10 +593,6 @@ export function spray(s: SimState, op: SprayOp) {
         c.dead = true;
         c.deathCause = 'Знищено гербіцидом суцільної дії.';
         questFailed(s, 'Посів знищено гербіцидом суцільної дії.');
-      }
-      if (s.weather.tAir < 8) {
-        addLog(s, 'warn', 'Гліфосат у холод', 'За температури нижче +8 °C бур\'яни слабко поглинають і пересувають д.р. — ефективність знижена.');
-        eff *= 0.5;
       }
       s.weeds = round(s.weeds * (1 - 0.95 * eff), 1);
       addLog(s, 'info', 'Вегетуючі бур\'яни знищено', `Залишилось ${fmt(s.weeds, 0)} шт./м² (без ґрунтової дії).`);
@@ -698,6 +691,10 @@ export function spray(s: SimState, op: SprayOp) {
         c.losses.retard = 0.92;
         break;
       }
+      if (eff < 0.55) {
+        addLog(s, 'warn', 'Ретардант майже не подіяв', `Фактична ефективність ~${Math.round(eff * 100)}% — міжвузля не вкоротились, ризик вилягання зберігається.`);
+        break;
+      }
       c.retardant = true;
       addLog(s, 'info', 'Ретардант внесено', 'Нижні міжвузля вкорочуються та потовщуються, стебло стає міцнішим.');
       break;
@@ -724,6 +721,10 @@ export function spray(s: SimState, op: SprayOp) {
         );
         c.losses.desiccEarly = c.bbch < 79 ? 0.75 : 0.85;
       }
+      if (eff < 0.45) {
+        addLog(s, 'warn', 'Десикація нерівномірна', `Фактична ефективність ~${Math.round(eff * 100)}%: листя підсохло лише частково, збирання затягнеться.`);
+        break;
+      }
       c.desiccated = true;
       addLog(s, 'info', 'Десикацію виконано', 'Листя та стебла підсихають; збирання — через 7–10 діб.');
       break;
@@ -731,7 +732,7 @@ export function spray(s: SimState, op: SprayOp) {
     case 'antistress': {
       if (!c || !c.emerged) { addLog(s, 'warn', 'Обробка без вегетуючої культури', 'Листкової поверхні для поглинання немає.'); break; }
       const stressed = c.stressUntil >= s.day || c.wilting;
-      c.health = Math.min(100, c.health + 18 * eff);
+      c.health = Math.min(100, c.health + 18 * eff * Math.min(1.3, k));
       if (stressed) {
         c.stressUntil = s.day + 1;
         c.leafFrost = Math.max(0, c.leafFrost - 0.25 * eff);
@@ -740,6 +741,8 @@ export function spray(s: SimState, op: SprayOp) {
       break;
     }
   }
+  s.treatments.push({ day: s.day, op, dose, eff: round(Math.min(eff, 1), 2), bbch: c && c.emerged ? c.bbch : null, notes: cond.notes });
+  if (cond.notes.length) addLog(s, 'info', `Умови обробки: ${cond.notes.join(', ')}`, `Фактична ефективність ~${Math.round(Math.min(eff, 1) * 100)}%.`);
   evaluateQuest(s, { kind: 'spray', op, pre: p, eff });
 }
 

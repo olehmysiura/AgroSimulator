@@ -1,6 +1,6 @@
 import { Printer, X } from 'lucide-react';
 import { useState } from 'react';
-import { CROPS, TOOLS, ZONES } from '../sim/data';
+import { CROPS, PESTICIDES, SPRAYS, TOOLS, ZONES } from '../sim/data';
 import { yieldForecast } from '../sim/engine';
 import { QUESTS } from '../sim/quests';
 import type { SimState } from '../sim/types';
@@ -26,6 +26,7 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
   const score = Math.round(clamp(100 - s.mistakes.length * 8 - irrelevant * 3 - noDiag * 5 - failed * 10, 0, 100));
   const [ects, nat] = grade(score);
   const y = yieldForecast(s);
+  const tfi = s.treatments.filter((t) => PESTICIDES.includes(t.op)).reduce((a, t) => a + t.dose / SPRAYS[t.op].def, 0);
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 print:static print:bg-white" onClick={onClose}>
@@ -97,6 +98,34 @@ export default function ReportModal({ state: s, onClose }: { state: SimState; on
             ))}
           </Section>
         </div>
+
+        <Section title={`Обробки ЗЗР і добрива (${s.treatments.length}) · індекс навантаження пестицидами TFI ${fmt(tfi, 2)}`}>
+          {s.treatments.length === 0 ? <p className="text-slate-500">Обробок не було.</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-[11px]">
+                <thead className="text-[10px] uppercase text-slate-400"><tr className="border-b border-slate-700 text-left"><th className="py-1">Дата</th><th>Препарат / добриво</th><th>Норма</th><th>BBCH</th><th>Ефект.</th><th>Умови</th></tr></thead>
+                <tbody>
+                  {s.treatments.map((t, i) => {
+                    const d = SPRAYS[t.op];
+                    const off = t.dose < d.rate[0] * 0.95 || t.dose > d.rate[1] * 1.05;
+                    return (
+                      <tr key={i} className="border-b border-slate-800 align-top">
+                        <td className="py-0.5 whitespace-nowrap text-slate-400">{formatDay(t.day, true)}</td>
+                        <td>{d.name}</td>
+                        <td className={`whitespace-nowrap font-mono ${off ? 'text-amber-300' : ''}`}>{fmt(t.dose, t.dose < 1 ? 2 : 1)} {d.unit}</td>
+                        <td className="font-mono">{t.bbch ?? '—'}</td>
+                        <td className={`font-mono ${t.eff < 0.7 ? 'text-red-400' : ''}`}>{Math.round(t.eff * 100)}%</td>
+                        <td className="text-slate-400">{t.notes.join(', ') || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(s.crop?.residue || s.harvests.some((h) => h.residue)) && <p className="mt-1 font-semibold text-red-400">Порушено строк очікування: залишки ЗЗР у продукції можуть перевищувати МДР.</p>}
+          <p className="mt-1 text-[10px] text-slate-500">TFI — сума відношень фактичної норми пестициду до рекомендованої за всі обробки.</p>
+        </Section>
 
         <Section title={`Журнал операцій (${s.operations.length})`}>
           <div className="columns-1 gap-4 sm:columns-2">

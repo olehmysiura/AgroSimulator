@@ -255,22 +255,47 @@ export const TILLAGE: Record<TillageOp, TillageDef> = {
 };
 
 export type SprayGroup = 'herb' | 'protect' | 'regul' | 'nutr';
-export interface SprayDef { name: string; detail: string; group: SprayGroup; spreader?: boolean }
+export interface SprayDef {
+  name: string;
+  detail: string;
+  group: SprayGroup;
+  spreader?: boolean;
+  unit: string;
+  /** зареєстрований діапазон норми витрати [мін, макс] і рекомендована норма */
+  rate: [number, number];
+  def: number;
+  step: number;
+  /** спосіб дії: системний, контактний, ґрунтовий, добриво */
+  mode: 'systemic' | 'contact' | 'soil' | 'fert';
+  /** дощостійкість: год після обробки, потрібних для поглинання */
+  rainfast: number;
+  /** строк очікування до збирання, діб (0 — не регламентується) */
+  phi: number;
+  /** максимальна кратність обробок за сезон (0 — не обмежено) */
+  maxApps: number;
+  /** робочий діапазон температур повітря під час обробки, °C */
+  tOpt: [number, number];
+  /** група за механізмом дії (FRAC / IRAC / HRAC) — для резистентності */
+  moa?: string;
+}
 export const SPRAYS: Record<SprayOp, SprayDef> = {
-  preHerbicide: { name: 'Ґрунтовий досходовий гербіцид', detail: 'хлорацетаміди + триазинони', group: 'herb' },
-  postHerbicide: { name: 'Страховий післясходовий гербіцид', detail: 'сульфонілсечовини', group: 'herb' },
-  glyphosate: { name: 'Гербіцид суцільної дії', detail: 'гліфосат, 3 л/га', group: 'herb' },
-  fungicide: { name: 'Фунгіцид', detail: 'триазоли + стробілурини', group: 'protect' },
-  insecticide: { name: 'Інсектицид системно-контактний', detail: 'неонікотиноїд + піретроїд', group: 'protect' },
-  acaricide: { name: 'Акарицид', detail: 'абамектин / спіродиклофен', group: 'protect' },
-  retardant: { name: 'Ретардант (регулятор росту)', detail: 'хлормекват-хлорид + тринексапак-етил', group: 'regul' },
-  desiccant: { name: 'Десикант перед збиранням', detail: 'дикват, 2 л/га', group: 'regul' },
-  nitrogen: { name: 'Підживлення КАС-32 / карбамідом', detail: '+N 40 кг д.р./га', group: 'nutr' },
-  pk: { name: 'Основне фосфорно-калійне добриво', detail: 'P₆₀K₉₀ (суперфосфат + KCl), розкидач', group: 'nutr', spreader: true },
-  micro: { name: 'Позакореневе мікродобриво', detail: 'B + Zn + Mn (хелати)', group: 'nutr' },
-  liming: { name: 'Вапнування (меліорація кислих ґрунтів)', detail: 'вапняне борошно CaCO₃, 4 т/га', group: 'nutr', spreader: true },
-  antistress: { name: 'Антистресант', detail: 'амінокислоти + гумати', group: 'nutr' },
+  preHerbicide: { name: 'Ґрунтовий досходовий гербіцид', detail: 'С-метолахлор + метрибузин', group: 'herb', unit: 'л/га', rate: [1.5, 3], def: 2, step: 0.1, mode: 'soil', rainfast: 0, phi: 60, maxApps: 1, tOpt: [5, 30], moa: 'HRAC 15 + 5' },
+  postHerbicide: { name: 'Страховий післясходовий гербіцид', detail: 'сульфонілсечовини (римсульфурон)', group: 'herb', unit: 'г/га', rate: [20, 30], def: 25, step: 1, mode: 'systemic', rainfast: 4, phi: 60, maxApps: 1, tOpt: [10, 25], moa: 'HRAC 2 (ALS)' },
+  glyphosate: { name: 'Гербіцид суцільної дії', detail: 'гліфосат 360 г/л', group: 'herb', unit: 'л/га', rate: [2, 4], def: 3, step: 0.1, mode: 'systemic', rainfast: 6, phi: 14, maxApps: 2, tOpt: [12, 28], moa: 'HRAC 9 (EPSPS)' },
+  fungicide: { name: 'Фунгіцид', detail: 'протіоконазол + азоксистробін', group: 'protect', unit: 'л/га', rate: [0.6, 1.0], def: 0.8, step: 0.05, mode: 'systemic', rainfast: 2, phi: 35, maxApps: 2, tOpt: [10, 27], moa: 'FRAC 3 + 11' },
+  insecticide: { name: 'Інсектицид системно-контактний', detail: 'тіаклоприд + дельтаметрин', group: 'protect', unit: 'л/га', rate: [0.15, 0.3], def: 0.2, step: 0.01, mode: 'contact', rainfast: 2, phi: 30, maxApps: 2, tOpt: [8, 25], moa: 'IRAC 4A + 3A' },
+  acaricide: { name: 'Акарицид', detail: 'абамектин 18 г/л', group: 'protect', unit: 'л/га', rate: [0.4, 0.6], def: 0.5, step: 0.05, mode: 'contact', rainfast: 3, phi: 30, maxApps: 1, tOpt: [12, 30], moa: 'IRAC 6' },
+  retardant: { name: 'Ретардант (регулятор росту)', detail: 'хлормекват-хлорид + тринексапак-етил', group: 'regul', unit: 'л/га', rate: [1, 2], def: 1.5, step: 0.1, mode: 'systemic', rainfast: 4, phi: 60, maxApps: 2, tOpt: [8, 25] },
+  desiccant: { name: 'Десикант перед збиранням', detail: 'дикват 150 г/л', group: 'regul', unit: 'л/га', rate: [1.5, 2.5], def: 2, step: 0.1, mode: 'contact', rainfast: 1, phi: 5, maxApps: 1, tOpt: [5, 30] },
+  nitrogen: { name: 'Підживлення КАС-32 / карбамідом', detail: 'азот — струменеві розпилювачі або розкидач', group: 'nutr', unit: 'кг N/га', rate: [20, 60], def: 40, step: 5, mode: 'fert', rainfast: 0, phi: 0, maxApps: 0, tOpt: [-50, 25] },
+  pk: { name: 'Основне фосфорно-калійне добриво', detail: 'суперфосфат + KCl, відцентровий розкидач', group: 'nutr', spreader: true, unit: 'кг д.р. P₂O₅+K₂O/га', rate: [90, 180], def: 150, step: 10, mode: 'fert', rainfast: 0, phi: 0, maxApps: 0, tOpt: [-50, 50] },
+  micro: { name: 'Позакореневе мікродобриво', detail: 'B + Zn + Mn (хелати)', group: 'nutr', unit: 'л/га', rate: [0.5, 2], def: 1, step: 0.1, mode: 'systemic', rainfast: 2, phi: 0, maxApps: 3, tOpt: [8, 25] },
+  liming: { name: 'Вапнування (меліорація кислих ґрунтів)', detail: 'вапняне борошно CaCO₃, розкидач', group: 'nutr', spreader: true, unit: 'т/га', rate: [2, 6], def: 4, step: 0.5, mode: 'fert', rainfast: 0, phi: 0, maxApps: 0, tOpt: [-50, 50] },
+  antistress: { name: 'Антистресант', detail: 'амінокислоти + гумати', group: 'nutr', unit: 'л/га', rate: [0.5, 2], def: 1, step: 0.1, mode: 'systemic', rainfast: 2, phi: 0, maxApps: 3, tOpt: [5, 28] },
 };
+
+/** Препарати, що є пестицидами (для індексу обробок і строків очікування). */
+export const PESTICIDES: SprayOp[] = ['preHerbicide', 'postHerbicide', 'glyphosate', 'fungicide', 'insecticide', 'acaricide', 'retardant', 'desiccant'];
 
 export const TOOLS: Record<ToolId, { name: string; short: string; measures: string }> = {
   penetrometer: { name: 'Пенетрометр (твердомір ґрунту)', short: 'Пенетрометр', measures: 'механічний опір ґрунту проникненню конуса по глибині 0–150 см' },
